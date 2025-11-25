@@ -1,0 +1,37 @@
+{
+  "name": "lmcx-carbon-credit",
+  "version": "1.0.0",
+  "description": "Blockchain-based carbon credit tokenization with multi-framework regulatory compliance",
+  "main": "index.js",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:local": "hardhat run scripts/deploy.js --network localhost",
+    "deploy:testnet": "hardhat run scripts/deploy.js --network sepolia",
+    "clean": "hardhat clean",
+    "coverage": "hardhat coverage"
+  },
+  "keywords": [
+    "carbon-credit",
+    "blockchain",
+    "erc20",
+    "solidity",
+    "ethereum",
+    "compliance",
+    "OGMP",
+    "ISO14065",
+    "CORSIA",
+    "EPA",
+    "CDM"
+  ],
+  "author": "Last Mile Production, LLC",
+  "license": "MIT",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "@openzeppelin/contracts": "^4.9.0",
+    "hardhat": "^2.19.0"
+  },
+  "dependencies": {
+    "dotenv": "^16.3.0"
+  }
+}
