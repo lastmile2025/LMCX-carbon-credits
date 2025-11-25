@@ -8,7 +8,7 @@ Reporting a Vulnerability
 DO NOT create a public GitHub issue for security vulnerabilities.
 How to Report
 
-Email: security@lastmileproduction.com
+Email: security@lmcx.global
 Subject Line: [SECURITY] LMCX Carbon Credit - Brief Description
 Include:
 
