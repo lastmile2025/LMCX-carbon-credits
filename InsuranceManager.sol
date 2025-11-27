@@ -130,6 +130,18 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
     // Risk ratings from RatingAgency (tokenId => risk score)
     mapping(uint256 => uint256) public riskScores;
 
+    // === SECURITY FIX: Time-delayed risk score updates to prevent front-running ===
+    struct PendingRiskScore {
+        uint256 newScore;
+        uint256 effectiveTime;
+        bool exists;
+    }
+    mapping(uint256 => PendingRiskScore) public pendingRiskScores;
+    uint256 public constant RISK_SCORE_DELAY = 1 hours;  // Delay before new score takes effect
+
+    // === SECURITY FIX: Track committed capital per provider to prevent reserve inflation ===
+    mapping(bytes32 => uint256) public committedCapital;  // Capital locked for active policies
+
     // ============ Events ============
 
     event ProviderRegistered(
@@ -183,6 +195,18 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
 
     event RiskScoreUpdated(
         uint256 indexed tokenId,
+        uint256 newScore
+    );
+
+    event RiskScoreUpdateScheduled(
+        uint256 indexed tokenId,
+        uint256 newScore,
+        uint256 effectiveTime
+    );
+
+    event RiskScoreUpdateApplied(
+        uint256 indexed tokenId,
+        uint256 oldScore,
         uint256 newScore
     );
 
@@ -298,7 +322,25 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
     // ============ Policy Management ============
 
     /**
+     * @dev Get effective risk score for a token
+     * @notice Uses time-delayed score updates to prevent front-running
+     */
+    function getEffectiveRiskScore(uint256 tokenId) public view returns (uint256) {
+        PendingRiskScore memory pending = pendingRiskScores[tokenId];
+
+        // If there's a pending update and it's now effective, use it
+        if (pending.exists && block.timestamp >= pending.effectiveTime) {
+            return pending.newScore;
+        }
+
+        // Otherwise use current score (default 5000 = neutral)
+        uint256 currentScore = riskScores[tokenId];
+        return currentScore == 0 ? 5000 : currentScore;
+    }
+
+    /**
      * @dev Calculate premium for a policy
+     * @notice Uses time-delayed risk scores to prevent front-running arbitrage
      */
     function calculatePremium(
         uint256 tokenId,
@@ -308,10 +350,9 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
         CoverageType coverageType
     ) public view returns (uint256 premium) {
         PremiumParams memory params = premiumParams[coverageType];
-        
-        // Get risk score (default 5000 = neutral)
-        uint256 riskScore = riskScores[tokenId];
-        if (riskScore == 0) riskScore = 5000;
+
+        // SECURITY FIX: Use effective risk score (with time delay protection)
+        uint256 riskScore = getEffectiveRiskScore(tokenId);
 
         // Base premium calculation
         // premium = coverageAmount * baseRate / 10000
@@ -330,6 +371,7 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
 
     /**
      * @dev Purchase an insurance policy
+     * @notice SECURITY FIX: Properly tracks committed capital for solvency
      */
     function purchasePolicy(
         bytes32 providerId,
@@ -343,7 +385,7 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
         InsuranceProvider storage provider = providers[providerId];
         require(provider.isActive, "Provider not active");
         require(durationDays >= 30 && durationDays <= 3650, "Invalid duration");
-        
+
         // Verify holder has the credits
         require(
             carbonCreditToken.balanceOf(msg.sender, tokenId) >= creditsToInsure,
@@ -360,9 +402,13 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
         );
         require(msg.value >= premium, "Insufficient premium");
 
-        // Check provider has adequate capital (require 10% reserve)
+        // SECURITY FIX: Check available capital (reserve - already committed)
+        // Require 10% reserve ratio against ALL outstanding coverage
+        uint256 availableCapital = provider.capitalReserve > committedCapital[providerId]
+            ? provider.capitalReserve - committedCapital[providerId]
+            : 0;
         require(
-            provider.capitalReserve >= coverageAmount / 10,
+            availableCapital >= coverageAmount / 10,
             "Insufficient provider capital"
         );
 
@@ -388,6 +434,9 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
         provider.totalPoliciesIssued++;
         provider.capitalReserve += premium;
 
+        // SECURITY FIX: Track committed capital for this policy
+        committedCapital[providerId] += coverageAmount;
+
         // Refund excess payment
         if (msg.value > premium) {
             (bool success, ) = msg.sender.call{value: msg.value - premium}("");
@@ -408,8 +457,9 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
 
     /**
      * @dev Cancel a policy (by holder before claims)
+     * @notice SECURITY FIX: Properly decrements provider capital reserve to prevent inflation attack
      */
-    function cancelPolicy(uint256 policyId) external {
+    function cancelPolicy(uint256 policyId) external nonReentrant {
         InsurancePolicy storage policy = policies[policyId];
         require(policy.policyHolder == msg.sender, "Not policy holder");
         require(policy.status == PolicyStatus.ACTIVE, "Not active");
@@ -417,14 +467,28 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
 
         policy.status = PolicyStatus.CANCELLED;
 
+        InsuranceProvider storage provider = providers[policy.providerId];
+
         // Calculate prorated refund
         uint256 remainingDays = (policy.endDate - block.timestamp) / 1 days;
         uint256 totalDays = (policy.endDate - policy.startDate) / 1 days;
         uint256 refund = (policy.premium * remainingDays * 80) / (totalDays * 100); // 80% prorated refund
 
+        // SECURITY FIX: Decrement provider capital reserve by the refund amount
+        // This ensures the accounting stays in sync with actual ETH balance
         if (refund > 0) {
+            require(provider.capitalReserve >= refund, "Insufficient reserve for refund");
+            provider.capitalReserve -= refund;
+
             (bool success, ) = msg.sender.call{value: refund}("");
             require(success, "Refund failed");
+        }
+
+        // SECURITY FIX: Release committed capital since policy is no longer active
+        if (committedCapital[policy.providerId] >= policy.coverageAmount) {
+            committedCapital[policy.providerId] -= policy.coverageAmount;
+        } else {
+            committedCapital[policy.providerId] = 0;
         }
 
         emit PolicyCancelled(policyId, "Holder cancelled");
@@ -501,12 +565,13 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
 
     /**
      * @dev Pay out an approved claim
+     * @notice SECURITY FIX: Releases committed capital when claim is paid
      */
     function payClaim(uint256 claimId) external onlyRole(CLAIMS_ADJUSTER_ROLE) nonReentrant {
         InsuranceClaim storage claim = claims[claimId];
         require(claim.status == ClaimStatus.APPROVED, "Not approved");
 
-        InsurancePolicy memory policy = policies[claim.policyId];
+        InsurancePolicy storage policy = policies[claim.policyId];
         InsuranceProvider storage provider = providers[policy.providerId];
 
         require(provider.capitalReserve >= claim.approvedAmount, "Insufficient reserve");
@@ -514,6 +579,13 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
         provider.capitalReserve -= claim.approvedAmount;
         provider.totalClaimsPaid += claim.approvedAmount;
         claim.status = ClaimStatus.PAID;
+
+        // SECURITY FIX: Release committed capital since policy is now claimed
+        if (committedCapital[policy.providerId] >= policy.coverageAmount) {
+            committedCapital[policy.providerId] -= policy.coverageAmount;
+        } else {
+            committedCapital[policy.providerId] = 0;
+        }
 
         (bool success, ) = claim.claimant.call{value: claim.approvedAmount}("");
         require(success, "Payment failed");
@@ -524,12 +596,75 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
     // ============ Risk Score Integration ============
 
     /**
-     * @dev Update risk score for a token (called by RatingAgency)
+     * @dev Schedule a risk score update with time delay
+     * @notice SECURITY FIX: Time-delayed updates prevent front-running premium arbitrage
+     *
+     * The delay ensures that:
+     * 1. Users cannot front-run score increases to lock in lower premiums
+     * 2. Users cannot back-run score decreases to wait for lower premiums
+     * 3. All users see the same effective score at any given time
      */
-    function updateRiskScore(uint256 tokenId, uint256 score) external onlyRole(UNDERWRITER_ROLE) {
+    function scheduleRiskScoreUpdate(uint256 tokenId, uint256 newScore) external onlyRole(UNDERWRITER_ROLE) {
+        require(newScore <= 10000, "Score must be <= 10000");
+
+        // First, apply any pending update that's now effective
+        _applyPendingRiskScore(tokenId);
+
+        // Schedule the new update
+        pendingRiskScores[tokenId] = PendingRiskScore({
+            newScore: newScore,
+            effectiveTime: block.timestamp + RISK_SCORE_DELAY,
+            exists: true
+        });
+
+        emit RiskScoreUpdateScheduled(tokenId, newScore, block.timestamp + RISK_SCORE_DELAY);
+    }
+
+    /**
+     * @dev Apply a pending risk score update if it's now effective
+     */
+    function applyPendingRiskScore(uint256 tokenId) external {
+        _applyPendingRiskScore(tokenId);
+    }
+
+    /**
+     * @dev Internal function to apply pending risk score
+     */
+    function _applyPendingRiskScore(uint256 tokenId) internal {
+        PendingRiskScore storage pending = pendingRiskScores[tokenId];
+
+        if (pending.exists && block.timestamp >= pending.effectiveTime) {
+            uint256 oldScore = riskScores[tokenId];
+            riskScores[tokenId] = pending.newScore;
+            pending.exists = false;
+
+            emit RiskScoreUpdateApplied(tokenId, oldScore, pending.newScore);
+        }
+    }
+
+    /**
+     * @dev Legacy immediate update - only for emergency use by admin
+     * @notice Should only be used in emergencies; prefer scheduleRiskScoreUpdate
+     */
+    function updateRiskScoreEmergency(uint256 tokenId, uint256 score) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(score <= 10000, "Score must be <= 10000");
+
+        // Clear any pending update
+        pendingRiskScores[tokenId].exists = false;
+
+        uint256 oldScore = riskScores[tokenId];
         riskScores[tokenId] = score;
+
         emit RiskScoreUpdated(tokenId, score);
+        emit RiskScoreUpdateApplied(tokenId, oldScore, score);
+    }
+
+    /**
+     * @dev Check if there's a pending risk score update
+     */
+    function hasPendingRiskScoreUpdate(uint256 tokenId) external view returns (bool, uint256, uint256) {
+        PendingRiskScore memory pending = pendingRiskScores[tokenId];
+        return (pending.exists, pending.newScore, pending.effectiveTime);
     }
 
     // ============ Premium Parameter Management ============
@@ -555,6 +690,39 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
     }
 
     // ============ Query Functions ============
+
+    /**
+     * @dev Get available capital for a provider (total reserve minus committed)
+     */
+    function getAvailableCapital(bytes32 providerId) external view returns (uint256) {
+        InsuranceProvider storage provider = providers[providerId];
+        if (provider.capitalReserve > committedCapital[providerId]) {
+            return provider.capitalReserve - committedCapital[providerId];
+        }
+        return 0;
+    }
+
+    /**
+     * @dev Release committed capital for expired policies
+     * @notice Call this periodically to clean up expired policies and free capital
+     */
+    function releaseExpiredPolicyCapital(uint256[] calldata policyIds) external {
+        for (uint256 i = 0; i < policyIds.length; i++) {
+            InsurancePolicy storage policy = policies[policyIds[i]];
+
+            // Only process if policy expired naturally (not claimed/cancelled)
+            if (policy.status == PolicyStatus.ACTIVE && block.timestamp > policy.endDate) {
+                policy.status = PolicyStatus.EXPIRED;
+
+                // Release committed capital
+                if (committedCapital[policy.providerId] >= policy.coverageAmount) {
+                    committedCapital[policy.providerId] -= policy.coverageAmount;
+                } else {
+                    committedCapital[policy.providerId] = 0;
+                }
+            }
+        }
+    }
 
     /**
      * @dev Get all policies for a holder
