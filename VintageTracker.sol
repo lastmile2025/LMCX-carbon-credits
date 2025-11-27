@@ -9,11 +9,12 @@ import "@openzeppelin/contracts/security/Pausable.sol";
  * @title VintageTracker
  * @dev Comprehensive credit lifecycle and vintage tracking system with:
  * - Vintage year classification and automatic discount factors
- * - Mandatory cooling-off period between minting and first transfer
+ * - No cooling-off period - credits immediately transferable upon minting
  * - Credit provenance tracking with full history
  * - Geofencing for jurisdiction-specific compliance
  * - Lifecycle state machine (mint -> active -> transferred -> retired/invalidated)
  * - Vintage quality scoring based on age and verification status
+ * - Slower discount curve reflecting methane's time-sensitive value
  *
  * This contract ensures credits maintain integrity throughout their lifecycle
  * and provides transparent provenance for regulatory compliance.
@@ -25,14 +26,14 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
     bytes32 public constant VINTAGE_ADMIN_ROLE = keccak256("VINTAGE_ADMIN_ROLE");
 
     // ============ Constants ============
-    uint256 public constant COOLING_OFF_PERIOD = 7 days;
+    uint256 public constant COOLING_OFF_PERIOD = 0;  // No cooling-off period - immediate transferability
     uint256 public constant MAX_VINTAGE_AGE = 10 * 365 days; // 10 years
     uint256 public constant PRECISION = 10000;
     uint256 public constant MIN_VINTAGE_QUALITY = 1000; // 10% minimum
 
     // ============ Enums ============
     enum LifecycleState {
-        Minted,             // Just created, in cooling-off period
+        Minted,             // Just created, immediately active
         Active,             // Available for trading
         Locked,             // Temporarily locked (dispute, verification)
         Transferred,        // Has been transferred at least once
@@ -42,11 +43,11 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
     }
 
     enum VintageGrade {
-        Premium,            // < 1 year old
-        Standard,           // 1-3 years old
-        Discount,           // 3-5 years old
-        Legacy,             // 5-8 years old
-        Archive             // 8-10 years old
+        Premium,            // < 2 years old (0% discount)
+        Standard,           // 2-4 years old (2% discount)
+        Discount,           // 4-6 years old (5% discount)
+        Legacy,             // 6-8 years old (10% discount)
+        Archive             // 8-10 years old (20% discount)
     }
 
     // ============ Structs ============
@@ -113,17 +114,19 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         bytes32[] compatibleJurisdictions;
     }
 
-    /// @notice Vintage discount schedule
+    /// @notice Vintage discount schedule - slower decline curve
+    /// @dev Methane today is worth more than methane tomorrow, so discounts increase with age
+    /// but at a gradual rate to preserve credit value
     struct DiscountSchedule {
-        uint256 premiumMaxAge;          // Max age for Premium grade
-        uint256 standardMaxAge;
-        uint256 discountMaxAge;
-        uint256 legacyMaxAge;
-        uint256 premiumDiscount;        // 0 = no discount
-        uint256 standardDiscount;       // e.g., 500 = 5%
-        uint256 discountDiscount;       // e.g., 1500 = 15%
-        uint256 legacyDiscount;         // e.g., 3000 = 30%
-        uint256 archiveDiscount;        // e.g., 5000 = 50%
+        uint256 premiumMaxAge;          // Max age for Premium grade (2 years default)
+        uint256 standardMaxAge;         // Max age for Standard grade (4 years default)
+        uint256 discountMaxAge;         // Max age for Discount grade (6 years default)
+        uint256 legacyMaxAge;           // Max age for Legacy grade (8 years default)
+        uint256 premiumDiscount;        // 0 = no discount (newest credits)
+        uint256 standardDiscount;       // e.g., 200 = 2% (gradual decline)
+        uint256 discountDiscount;       // e.g., 500 = 5% (moderate decline)
+        uint256 legacyDiscount;         // e.g., 1000 = 10% (older credits)
+        uint256 archiveDiscount;        // e.g., 2000 = 20% (oldest accepted credits)
     }
 
     /// @notice Lock record
@@ -239,17 +242,18 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         _grantRole(GEOFENCE_ADMIN_ROLE, msg.sender);
         _grantRole(VINTAGE_ADMIN_ROLE, msg.sender);
 
-        // Set default discount schedule
+        // Set default discount schedule - slower decline curve
+        // Methane today is worth more than methane tomorrow, but decline is gradual
         discountSchedule = DiscountSchedule({
-            premiumMaxAge: 365 days,        // 1 year
-            standardMaxAge: 3 * 365 days,   // 3 years
-            discountMaxAge: 5 * 365 days,   // 5 years
-            legacyMaxAge: 8 * 365 days,     // 8 years
-            premiumDiscount: 0,             // No discount
-            standardDiscount: 500,          // 5%
-            discountDiscount: 1500,         // 15%
-            legacyDiscount: 3000,           // 30%
-            archiveDiscount: 5000           // 50%
+            premiumMaxAge: 2 * 365 days,    // 2 years - Premium (no discount)
+            standardMaxAge: 4 * 365 days,   // 4 years - Standard (2% discount)
+            discountMaxAge: 6 * 365 days,   // 6 years - Discount (5% discount)
+            legacyMaxAge: 8 * 365 days,     // 8 years - Legacy (10% discount)
+            premiumDiscount: 0,             // 0% - newest credits retain full value
+            standardDiscount: 200,          // 2% - very gradual decline
+            discountDiscount: 500,          // 5% - moderate decline
+            legacyDiscount: 1000,           // 10% - older credits
+            archiveDiscount: 2000           // 20% - maximum discount for oldest credits
         });
     }
 
@@ -362,19 +366,22 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
     // ============ Lifecycle State Management ============
 
     /**
-     * @dev Activate credit after cooling-off period
+     * @dev Activate credit - no cooling-off period required
+     * @notice Credits are immediately active upon minting but this function
+     * can be used to explicitly transition state if needed
      */
     function activateCredit(bytes32 creditId) external {
         VintageRecord storage record = vintageRecords[creditId];
         require(record.creditId != bytes32(0), "Record not found");
         require(record.state == LifecycleState.Minted, "Not in Minted state");
-        require(block.timestamp >= record.coolingOffEndsAt, "Cooling-off period not ended");
+        // No cooling-off period check - credits are immediately transferable
 
         _transitionState(creditId, LifecycleState.Active, "activate");
     }
 
     /**
      * @dev Record a credit transfer
+     * @notice No cooling-off period - credits are immediately transferable
      */
     function recordTransfer(
         bytes32 creditId,
@@ -384,13 +391,16 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
     ) external onlyRole(LIFECYCLE_MANAGER_ROLE) {
         VintageRecord storage record = vintageRecords[creditId];
         require(record.creditId != bytes32(0), "Record not found");
-        require(record.state == LifecycleState.Active || record.state == LifecycleState.Transferred, "Cannot transfer");
+        // Allow transfer from Minted state as well since no cooling-off period
+        require(
+            record.state == LifecycleState.Minted ||
+            record.state == LifecycleState.Active ||
+            record.state == LifecycleState.Transferred,
+            "Cannot transfer"
+        );
         require(!locks[creditId].isActive, "Credit is locked");
 
-        // Check cooling-off period for first transfer
-        if (record.transferCount == 0) {
-            require(block.timestamp >= record.coolingOffEndsAt, "Cooling-off period active");
-        }
+        // No cooling-off period check - credits are immediately transferable
 
         // Check geofencing
         if (record.isGeofenced) {
@@ -402,8 +412,9 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         record.transferCount++;
         record.lastTransferAt = block.timestamp;
 
-        if (record.state == LifecycleState.Active) {
-            creditsByState[LifecycleState.Active]--;
+        // Transition to Transferred state from Minted or Active
+        if (record.state == LifecycleState.Minted || record.state == LifecycleState.Active) {
+            creditsByState[previousState]--;
             creditsByState[LifecycleState.Transferred]++;
             record.state = LifecycleState.Transferred;
         }
@@ -827,6 +838,7 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
 
     /**
      * @dev Check if credit is transferable
+     * @notice No cooling-off period - Minted credits are immediately transferable
      */
     function isTransferable(bytes32 creditId) external view returns (bool) {
         VintageRecord storage record = vintageRecords[creditId];
@@ -836,8 +848,7 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         if (record.state == LifecycleState.Retired ||
             record.state == LifecycleState.Invalidated ||
             record.state == LifecycleState.Expired) return false;
-        if (record.state == LifecycleState.Minted &&
-            block.timestamp < record.coolingOffEndsAt) return false;
+        // No cooling-off period check - Minted credits are immediately transferable
 
         return true;
     }

@@ -215,6 +215,11 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
     bool public requireVerificationForTransfer = false;
     uint256 public minOracleQuality = 7000; // 70% minimum quality score
 
+    // Optional feature flags
+    bool public insuranceEnabled = false;      // Insurance is optional
+    bool public ratingsEnabled = false;        // Ratings are optional
+    bool public vintageTrackingEnabled = true; // Vintage tracking enabled by default
+
     // ============ Events ============
 
     event ComplianceManagerSet(address indexed complianceManager);
@@ -311,6 +316,11 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
         address from,
         address to,
         string reason
+    );
+
+    event FeatureFlagUpdated(
+        string feature,
+        bool enabled
     );
 
     constructor(string memory baseURI_) ERC1155(baseURI_) {
@@ -416,8 +426,8 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
 
         _mint(to, tokenId, amount, "");
 
-        // Create vintage record if tracker is set
-        if (vintageTracker != address(0)) {
+        // Create vintage record if tracker is set and enabled
+        if (vintageTrackingEnabled && vintageTracker != address(0)) {
             IVintageTracker(vintageTracker).createVintageRecord(
                 creditId,
                 tokenId,
@@ -474,8 +484,8 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
 
         bytes32 creditId = tokenToCreditId[tokenId];
 
-        // Record retirement in vintage tracker
-        if (vintageTracker != address(0) && creditId != bytes32(0)) {
+        // Record retirement in vintage tracker if enabled
+        if (vintageTrackingEnabled && vintageTracker != address(0) && creditId != bytes32(0)) {
             IVintageTracker(vintageTracker).retireCredit(
                 creditId,
                 amount,
@@ -516,8 +526,8 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
 
         bytes32 creditId = tokenToCreditId[tokenId];
 
-        // Record retirement in vintage tracker with certificate
-        if (vintageTracker != address(0) && creditId != bytes32(0)) {
+        // Record retirement in vintage tracker with certificate if enabled
+        if (vintageTrackingEnabled && vintageTracker != address(0) && creditId != bytes32(0)) {
             IVintageTracker(vintageTracker).retireCredit(
                 creditId,
                 amount,
@@ -547,6 +557,7 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
 
     /**
      * @dev Update insurance status for a token (called by InsuranceManager)
+     * @notice Insurance is an optional feature - must be enabled first
      */
     function updateInsuranceStatus(
         uint256 tokenId,
@@ -554,8 +565,9 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
         uint256 maxCoverage,
         uint256 riskScore
     ) external onlyRole(INSURANCE_MANAGER_ROLE) {
+        require(insuranceEnabled, "Insurance feature not enabled");
         require(_tokenIdExists[tokenId], "Token does not exist");
-        
+
         insuranceStatus[tokenId] = InsuranceStatus({
             isInsurable: isInsurable,
             maxCoverage: maxCoverage,
@@ -588,6 +600,7 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
 
     /**
      * @dev Update rating information (called by RatingAgencyRegistry)
+     * @notice Ratings are an optional feature - must be enabled first
      */
     function updateRating(
         uint256 tokenId,
@@ -595,8 +608,9 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
         string memory grade,
         uint256 ratingCount
     ) external onlyRole(RATING_AGENCY_ROLE) {
+        require(ratingsEnabled, "Ratings feature not enabled");
         require(_tokenIdExists[tokenId], "Token does not exist");
-        
+
         ratingInfo[tokenId] = RatingInfo({
             aggregatedScore: aggregatedScore,
             grade: grade,
@@ -604,9 +618,11 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
             ratingCount: ratingCount
         });
 
-        // Also update insurance risk score (inverse relationship)
-        insuranceStatus[tokenId].riskScore = 10000 - aggregatedScore;
-        insuranceStatus[tokenId].lastRiskUpdate = block.timestamp;
+        // Also update insurance risk score if insurance is enabled (inverse relationship)
+        if (insuranceEnabled) {
+            insuranceStatus[tokenId].riskScore = 10000 - aggregatedScore;
+            insuranceStatus[tokenId].lastRiskUpdate = block.timestamp;
+        }
 
         emit RatingUpdated(tokenId, aggregatedScore, grade, ratingCount);
     }
@@ -913,6 +929,63 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
         minOracleQuality = _minOracleQuality;
     }
 
+    /**
+     * @dev Enable or disable optional features
+     * @param _insuranceEnabled Enable insurance integration
+     * @param _ratingsEnabled Enable rating agency integration
+     * @param _vintageTrackingEnabled Enable vintage lifecycle tracking
+     */
+    function setFeatureFlags(
+        bool _insuranceEnabled,
+        bool _ratingsEnabled,
+        bool _vintageTrackingEnabled
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (insuranceEnabled != _insuranceEnabled) {
+            insuranceEnabled = _insuranceEnabled;
+            emit FeatureFlagUpdated("insurance", _insuranceEnabled);
+        }
+        if (ratingsEnabled != _ratingsEnabled) {
+            ratingsEnabled = _ratingsEnabled;
+            emit FeatureFlagUpdated("ratings", _ratingsEnabled);
+        }
+        if (vintageTrackingEnabled != _vintageTrackingEnabled) {
+            vintageTrackingEnabled = _vintageTrackingEnabled;
+            emit FeatureFlagUpdated("vintageTracking", _vintageTrackingEnabled);
+        }
+    }
+
+    /**
+     * @dev Enable insurance feature
+     */
+    function enableInsurance() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        insuranceEnabled = true;
+        emit FeatureFlagUpdated("insurance", true);
+    }
+
+    /**
+     * @dev Disable insurance feature
+     */
+    function disableInsurance() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        insuranceEnabled = false;
+        emit FeatureFlagUpdated("insurance", false);
+    }
+
+    /**
+     * @dev Enable ratings feature
+     */
+    function enableRatings() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        ratingsEnabled = true;
+        emit FeatureFlagUpdated("ratings", true);
+    }
+
+    /**
+     * @dev Disable ratings feature
+     */
+    function disableRatings() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        ratingsEnabled = false;
+        emit FeatureFlagUpdated("ratings", false);
+    }
+
     // ============ Vintage and Verification Query Functions ============
 
     /**
@@ -1003,11 +1076,11 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
 
             // Skip checks for mints (from == 0) and burns (to == 0)
             if (from != address(0) && to != address(0)) {
-                // Check vintage tracker transferability
-                if (vintageTracker != address(0) && creditId != bytes32(0)) {
+                // Check vintage tracker transferability if enabled
+                if (vintageTrackingEnabled && vintageTracker != address(0) && creditId != bytes32(0)) {
                     bool isTransferable = IVintageTracker(vintageTracker).isTransferable(creditId);
                     if (!isTransferable) {
-                        emit TransferRestricted(tokenId, from, to, "Cooling-off period or lifecycle restriction");
+                        emit TransferRestricted(tokenId, from, to, "Lifecycle restriction");
                         revert("Transfer restricted by vintage tracker");
                     }
                 }
@@ -1032,8 +1105,8 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
 
             // Skip for mints and burns
             if (from != address(0) && to != address(0) && creditId != bytes32(0)) {
-                // Record transfer in vintage tracker
-                if (vintageTracker != address(0)) {
+                // Record transfer in vintage tracker if enabled
+                if (vintageTrackingEnabled && vintageTracker != address(0)) {
                     try IVintageTracker(vintageTracker).recordTransfer(
                         creditId,
                         from,
