@@ -955,7 +955,7 @@ describe("LMCXCarbonCredit", function () {
       const info = await token.getComprehensiveTokenInfo(tokenId);
 
       expect(info.metadata.projectId).to.equal(SAMPLE_PROJECTS.PROJECT_1);
-      expect(info.totalSupply).to.equal(AMOUNTS.MEDIUM);
+      expect(info.tokenTotalSupply).to.equal(AMOUNTS.MEDIUM);
     });
   });
 

@@ -301,7 +301,7 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
      * @dev Update oracle status
      */
     function setOracleStatus(address oracleAddress, OracleStatus newStatus)
-        external
+        public
         onlyRole(ORACLE_ADMIN_ROLE)
     {
         require(oracles[oracleAddress].oracleAddress != address(0), "Oracle not found");

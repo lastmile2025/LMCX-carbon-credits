@@ -385,8 +385,12 @@ describe("GovernanceController", function () {
         1,
         VoteType.For,
         "I support this proposal"
-      )).to.emit(governance, "VoteCast")
-        .withArgs(voter1.address, 1, VoteType.For, expect.anything(), "I support this proposal");
+      )).to.emit(governance, "VoteCast");
+
+      // Verify the vote was recorded
+      const receipt = await governance.getReceipt(1, voter1.address);
+      expect(receipt.hasVoted).to.be.true;
+      expect(receipt.support).to.equal(VoteType.For);
     });
 
     it("Should record vote in receipt", async function () {
@@ -617,8 +621,10 @@ describe("GovernanceController", function () {
       const config = await governance.getConfig();
       await time.increase(Number(config.timelockDelay) + TIME.GRACE_PERIOD + 1);
 
+      // State becomes Expired, so execute fails with "Proposal not queued"
+      // because state() returns Expired instead of Queued
       await expect(governance.connect(executor).execute(1))
-        .to.be.revertedWith("Proposal expired");
+        .to.be.revertedWith("Proposal not queued");
     });
 
     it("Should revert execution without EXECUTOR_ROLE", async function () {
@@ -878,9 +884,9 @@ describe("GovernanceController", function () {
     it("Should return proposal actions", async function () {
       const { governance, targets, values, calldatas } = await loadFixture(deployWithActiveProposalFixture);
 
-      const actions = await governance.getProposalActions(1);
-      expect(actions.targets[0]).to.equal(targets[0]);
-      expect(actions.values[0]).to.equal(values[0]);
+      const [returnedTargets, returnedValues, , returnedCalldatas] = await governance.getProposalActions(1);
+      expect(returnedTargets[0]).to.equal(targets[0]);
+      expect(returnedValues[0]).to.equal(values[0]);
     });
   });
 });

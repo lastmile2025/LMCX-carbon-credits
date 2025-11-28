@@ -561,7 +561,7 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
      */
     function updateInsuranceStatus(
         uint256 tokenId,
-        bool isInsurable,
+        bool _isInsurable,
         uint256 maxCoverage,
         uint256 riskScore
     ) external onlyRole(INSURANCE_MANAGER_ROLE) {
@@ -569,13 +569,13 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
         require(_tokenIdExists[tokenId], "Token does not exist");
 
         insuranceStatus[tokenId] = InsuranceStatus({
-            isInsurable: isInsurable,
+            isInsurable: _isInsurable,
             maxCoverage: maxCoverage,
             riskScore: riskScore,
             lastRiskUpdate: block.timestamp
         });
 
-        emit InsuranceStatusUpdated(tokenId, isInsurable, maxCoverage, riskScore);
+        emit InsuranceStatusUpdated(tokenId, _isInsurable, maxCoverage, riskScore);
     }
 
     /**
@@ -755,26 +755,26 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
     /**
      * @dev Get comprehensive token information including all integrations
      */
-    function getComprehensiveTokenInfo(uint256 tokenId) 
-        external 
-        view 
+    function getComprehensiveTokenInfo(uint256 tokenId)
+        external
+        view
         returns (
             CreditMetadata memory metadata,
             InsuranceStatus memory insurance,
             RatingInfo memory rating,
             DMRVStatus memory dmrv,
             SMARTCompliance memory smart,
-            uint256 totalSupply
-        ) 
+            uint256 tokenTotalSupply
+        )
     {
         require(_tokenIdExists[tokenId], "Token does not exist");
-        
+
         metadata = _creditMetadata[tokenId];
         insurance = insuranceStatus[tokenId];
         rating = ratingInfo[tokenId];
         dmrv = dmrvStatus[tokenId];
         smart = smartCompliance[tokenId];
-        totalSupply = totalSupply(tokenId);
+        tokenTotalSupply = totalSupply(tokenId);
     }
 
     // ============ Metadata Functions ============
@@ -1063,12 +1063,16 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
 
     // ============ Required Overrides ============
 
-    function _update(
+    function _beforeTokenTransfer(
+        address operator,
         address from,
         address to,
         uint256[] memory ids,
-        uint256[] memory values
+        uint256[] memory amounts,
+        bytes memory data
     ) internal override(ERC1155, ERC1155Supply) whenNotPaused {
+        super._beforeTokenTransfer(operator, from, to, ids, amounts, data);
+
         // Check transfer restrictions for each token
         for (uint256 i = 0; i < ids.length; i++) {
             uint256 tokenId = ids[i];
@@ -1095,8 +1099,17 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
                 }
             }
         }
+    }
 
-        super._update(from, to, ids, values);
+    function _afterTokenTransfer(
+        address operator,
+        address from,
+        address to,
+        uint256[] memory ids,
+        uint256[] memory amounts,
+        bytes memory data
+    ) internal override {
+        super._afterTokenTransfer(operator, from, to, ids, amounts, data);
 
         // Record transfers in integrated systems
         for (uint256 i = 0; i < ids.length; i++) {
