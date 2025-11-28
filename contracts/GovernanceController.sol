@@ -105,6 +105,7 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
         uint256 timelockDelay;          // Delay before execution
         uint256 quorumNumerator;        // Quorum percentage (out of 10000)
         uint256 proposalThreshold;      // Minimum votes to create proposal
+        uint256 blockTime;              // Average block time in seconds (configurable per chain)
     }
 
     struct MultiSigConfig {
@@ -215,6 +216,8 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
         uint256 quorumNumerator
     );
 
+    event BlockTimeUpdated(uint256 newBlockTime);
+
     event GuardianAction(
         string actionType,
         uint256 indexed proposalId,
@@ -271,7 +274,8 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
             votingPeriod: _votingPeriod,
             timelockDelay: _timelockDelay,
             quorumNumerator: _quorumNumerator,
-            proposalThreshold: _proposalThreshold
+            proposalThreshold: _proposalThreshold,
+            blockTime: 12  // Default to 12 seconds (Ethereum mainnet), can be updated via setBlockTime
         });
 
         multiSigConfig = MultiSigConfig({
@@ -309,8 +313,10 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
         require(proposerVotes >= config.proposalThreshold, "Below proposal threshold");
 
         uint256 proposalId = ++proposalCount;
-        uint256 startBlock = block.number + (config.proposalDelay / 12); // Assuming ~12s blocks
-        uint256 endBlock = startBlock + (config.votingPeriod / 12);
+        // Use configurable block time for cross-chain compatibility
+        uint256 blockTime = config.blockTime > 0 ? config.blockTime : 12;
+        uint256 startBlock = block.number + (config.proposalDelay / blockTime);
+        uint256 endBlock = startBlock + (config.votingPeriod / blockTime);
 
         Proposal storage proposal = proposals[proposalId];
         proposal.id = proposalId;
@@ -580,18 +586,28 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
 
     /**
      * @dev Delegate votes to another address
+     * @param delegatee Address to delegate to (address(0) to remove delegation)
      */
     function delegate(address delegatee) external {
-        address currentDelegate = votingPower[msg.sender].delegate;
+        require(delegatee != msg.sender, "Cannot delegate to self");
 
-        if (currentDelegate != address(0)) {
-            votingPower[currentDelegate].delegatedVotes -= votingPower[msg.sender].baseVotes;
+        address currentDelegate = votingPower[msg.sender].delegate;
+        uint256 delegatorBaseVotes = votingPower[msg.sender].baseVotes;
+
+        // Remove votes from current delegate (with underflow protection)
+        if (currentDelegate != address(0) && delegatorBaseVotes > 0) {
+            uint256 currentDelegatedVotes = votingPower[currentDelegate].delegatedVotes;
+            // Safe subtraction: cap at 0 to prevent underflow in edge cases
+            votingPower[currentDelegate].delegatedVotes = currentDelegatedVotes >= delegatorBaseVotes
+                ? currentDelegatedVotes - delegatorBaseVotes
+                : 0;
         }
 
         votingPower[msg.sender].delegate = delegatee;
 
-        if (delegatee != address(0)) {
-            votingPower[delegatee].delegatedVotes += votingPower[msg.sender].baseVotes;
+        // Add votes to new delegate
+        if (delegatee != address(0) && delegatorBaseVotes > 0) {
+            votingPower[delegatee].delegatedVotes += delegatorBaseVotes;
         }
 
         emit DelegateChanged(msg.sender, currentDelegate, delegatee);
@@ -780,6 +796,16 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
     function setRoleVotingMultiplier(bytes32 role, uint256 multiplier) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(multiplier >= 10000 && multiplier <= 30000, "Invalid multiplier"); // 1x to 3x
         roleVotingMultiplier[role] = multiplier;
+    }
+
+    /**
+     * @dev Set block time for cross-chain compatibility
+     * @param newBlockTime Block time in seconds (e.g., 12 for Ethereum, 2 for Polygon)
+     */
+    function setBlockTime(uint256 newBlockTime) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(newBlockTime > 0 && newBlockTime <= 60, "Invalid block time"); // 1-60 seconds reasonable range
+        config.blockTime = newBlockTime;
+        emit BlockTimeUpdated(newBlockTime);
     }
 
     // ============ View Functions ============

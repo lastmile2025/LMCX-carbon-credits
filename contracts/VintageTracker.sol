@@ -322,11 +322,15 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
 
     /**
      * @dev Calculate vintage grade and discount based on age
+     * @notice Uses 365.25 days/year average to account for leap years
      */
     function calculateVintageGrade(uint256 vintageYear) public view returns (VintageGrade grade, uint256 discount) {
-        uint256 currentYear = block.timestamp / 365 days + 1970;
-        uint256 age = currentYear - vintageYear;
-        uint256 ageInDays = age * 365 days;
+        // Use 365.25 days average to account for leap years (more accurate over long periods)
+        // Multiplied by 4 to avoid decimals: (timestamp * 4) / (1461 days) where 1461 = 365.25 * 4
+        uint256 currentYear = (block.timestamp * 4) / (1461 days) + 1970;
+        uint256 age = currentYear > vintageYear ? currentYear - vintageYear : 0;
+        // Calculate age in seconds using average year length
+        uint256 ageInDays = (age * 1461 days) / 4;
 
         if (ageInDays <= discountSchedule.premiumMaxAge) {
             return (VintageGrade.Premium, discountSchedule.premiumDiscount);
@@ -359,9 +363,10 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
             emit VintageGradeUpdated(creditId, newGrade, newDiscount);
         }
 
-        // Check if vintage has expired
-        uint256 currentYear = block.timestamp / 365 days + 1970;
-        if ((currentYear - record.vintageYear) * 365 days > MAX_VINTAGE_AGE) {
+        // Check if vintage has expired (using leap year aware calculation)
+        uint256 currentYear = (block.timestamp * 4) / (1461 days) + 1970;
+        uint256 ageInYears = currentYear > record.vintageYear ? currentYear - record.vintageYear : 0;
+        if ((ageInYears * 1461 days) / 4 > MAX_VINTAGE_AGE) {
             _transitionState(creditId, LifecycleState.Expired, "expire");
         }
     }

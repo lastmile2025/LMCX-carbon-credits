@@ -302,10 +302,17 @@ contract DMRVOracle is AccessControl, Pausable {
         string[] calldata measurementTypes,
         bytes32[] calldata dataHashes
     ) external onlyRole(ENOVATE_NODE_ROLE) whenNotPaused {
-        require(measurementIds.length == sensorIds.length, "Array mismatch");
-        require(measurementIds.length == values.length, "Array mismatch");
+        // Complete array length validation
+        uint256 len = measurementIds.length;
+        require(len > 0, "Empty batch");
+        require(len <= 100, "Batch too large"); // Gas limit protection
+        require(sensorIds.length == len, "Array mismatch: sensorIds");
+        require(values.length == len, "Array mismatch: values");
+        require(units.length == len, "Array mismatch: units");
+        require(measurementTypes.length == len, "Array mismatch: measurementTypes");
+        require(dataHashes.length == len, "Array mismatch: dataHashes");
 
-        for (uint256 i = 0; i < measurementIds.length; i++) {
+        for (uint256 i = 0; i < len; i++) {
             if (isSensorValid(sensorIds[i])) {
                 int256 calibratedValue = (values[i] * sensors[sensorIds[i]].calibrationFactor) / 1e6;
 
@@ -336,7 +343,7 @@ contract DMRVOracle is AccessControl, Pausable {
             }
         }
 
-        latestMeasurement[projectId] = measurementIds[measurementIds.length - 1];
+        latestMeasurement[projectId] = measurementIds[len - 1];
     }
 
     /**
