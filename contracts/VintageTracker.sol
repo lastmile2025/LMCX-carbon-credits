@@ -161,6 +161,9 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
     bytes32[] public jurisdictionList;
     mapping(address => bytes32) public userJurisdiction;
 
+    // Gas optimization: O(1) jurisdiction compatibility lookup
+    mapping(bytes32 => mapping(bytes32 => bool)) public jurisdictionCompatibility;
+
     // Locks
     mapping(bytes32 => LockRecord) public locks;
 
@@ -702,6 +705,9 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         require(geofences[fromJurisdiction].isActive, "Source jurisdiction not active");
         require(geofences[toJurisdiction].isActive, "Target jurisdiction not active");
 
+        // Gas optimization: Set O(1) lookup mapping
+        jurisdictionCompatibility[fromJurisdiction][toJurisdiction] = true;
+        // Keep array for enumeration if needed
         geofences[fromJurisdiction].compatibleJurisdictions.push(toJurisdiction);
     }
 
@@ -734,15 +740,8 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         if (toJurisdiction != creditJurisdiction) {
             require(geofence.allowsInternationalTransfer, "International transfer not allowed");
 
-            // Check if target jurisdiction is compatible
-            bool isCompatible = false;
-            for (uint256 i = 0; i < geofence.compatibleJurisdictions.length; i++) {
-                if (geofence.compatibleJurisdictions[i] == toJurisdiction) {
-                    isCompatible = true;
-                    break;
-                }
-            }
-            require(isCompatible, "Incompatible jurisdiction");
+            // Gas optimization: O(1) lookup instead of O(n) loop
+            require(jurisdictionCompatibility[creditJurisdiction][toJurisdiction], "Incompatible jurisdiction");
         }
     }
 

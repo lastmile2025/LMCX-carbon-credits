@@ -175,6 +175,14 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
     bool public circuitBreakerActive;
     uint256 public circuitBreakerThreshold = 3; // Consecutive anomalies to trigger
 
+    // Gas optimization: Circular buffer for history
+    mapping(bytes32 => uint256) public historyHead;  // Points to oldest entry index
+    mapping(bytes32 => uint256) public historyCount; // Current count of history entries
+
+    // Gas optimization: O(1) duplicate submitter check
+    mapping(bytes32 => mapping(address => bool)) private _hasSubmittedInRound; // roundKey => oracle => hasSubmitted
+    mapping(bytes32 => uint256) public feedRoundId;  // Track submission rounds per feed
+
     // ============ Events ============
 
     event OracleRegistered(
@@ -406,16 +414,10 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
 
         submissions[submissionId] = submission;
 
-        // Check if oracle already submitted for this feed in current round
-        bool isNewSubmitter = true;
-        for (uint256 i = 0; i < feedOracleSubmitters[feedId].length; i++) {
-            if (feedOracleSubmitters[feedId][i] == msg.sender) {
-                isNewSubmitter = false;
-                break;
-            }
-        }
-
-        if (isNewSubmitter) {
+        // Gas optimization: O(1) duplicate check using mapping
+        bytes32 roundKey = keccak256(abi.encodePacked(feedId, feedRoundId[feedId]));
+        if (!_hasSubmittedInRound[roundKey][msg.sender]) {
+            _hasSubmittedInRound[roundKey][msg.sender] = true;
             feedOracleSubmitters[feedId].push(msg.sender);
         }
 
@@ -501,18 +503,21 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
 
         latestResults[feedId] = result;
 
-        // Add to history
-        if (resultHistory[feedId].length >= maxHistoryLength) {
-            // Remove oldest
-            for (uint256 i = 0; i < resultHistory[feedId].length - 1; i++) {
-                resultHistory[feedId][i] = resultHistory[feedId][i + 1];
-            }
-            resultHistory[feedId].pop();
+        // Gas optimization: O(1) circular buffer for history
+        if (historyCount[feedId] < maxHistoryLength) {
+            // Still filling up the buffer
+            resultHistory[feedId].push(result);
+            historyCount[feedId]++;
+        } else {
+            // Buffer is full, overwrite oldest entry
+            uint256 writeIndex = historyHead[feedId];
+            resultHistory[feedId][writeIndex] = result;
+            historyHead[feedId] = (writeIndex + 1) % maxHistoryLength;
         }
-        resultHistory[feedId].push(result);
 
-        // Clear submissions for next round
+        // Clear submissions for next round and increment round ID
         delete feedOracleSubmitters[feedId];
+        feedRoundId[feedId]++;  // Invalidates old round submissions in O(1)
 
         emit DataAggregated(feedId, aggregatedValue, validCount, qualityScore);
     }
@@ -877,12 +882,34 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
         view
         returns (AggregatedResult[] memory)
     {
-        AggregatedResult[] storage history = resultHistory[feedId];
-        uint256 resultCount = count > history.length ? history.length : count;
+        uint256 totalCount = historyCount[feedId];
+        uint256 resultCount = count > totalCount ? totalCount : count;
 
         AggregatedResult[] memory results = new AggregatedResult[](resultCount);
+
+        if (resultCount == 0) {
+            return results;
+        }
+
+        // Calculate starting index for reading (oldest of the requested entries)
+        // In circular buffer, head points to oldest, so we read from most recent backwards
+        uint256 head = historyHead[feedId];
+        uint256 len = resultHistory[feedId].length;
+
+        // Most recent entry is at (head - 1 + len) % len when buffer is full
+        // or at (totalCount - 1) when buffer is not full
         for (uint256 i = 0; i < resultCount; i++) {
-            results[i] = history[history.length - resultCount + i];
+            uint256 readIndex;
+            if (totalCount < maxHistoryLength) {
+                // Buffer not full yet, simple indexing from end
+                readIndex = totalCount - resultCount + i;
+            } else {
+                // Circular buffer: calculate position
+                // head points to oldest, so newest is at (head - 1 + len) % len
+                // We want the last 'resultCount' entries in chronological order
+                readIndex = (head + totalCount - resultCount + i) % len;
+            }
+            results[i] = resultHistory[feedId][readIndex];
         }
 
         return results;

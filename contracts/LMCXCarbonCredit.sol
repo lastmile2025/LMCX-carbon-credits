@@ -797,8 +797,41 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
         return _mintRecords[mintId];
     }
 
+    /// @notice Returns all token IDs. Warning: May fail for large arrays due to gas limits.
+    /// @dev For large collections, use getTokenIdsPaginated instead.
     function getAllTokenIds() external view returns (uint256[] memory) {
         return _allTokenIds;
+    }
+
+    /// @notice Gas-optimized paginated token ID retrieval
+    /// @param offset Starting index
+    /// @param limit Maximum number of token IDs to return
+    /// @return tokenIds Array of token IDs for the requested page
+    /// @return total Total number of token IDs available
+    function getTokenIdsPaginated(uint256 offset, uint256 limit)
+        external
+        view
+        returns (uint256[] memory tokenIds, uint256 total)
+    {
+        total = _allTokenIds.length;
+
+        if (offset >= total || limit == 0) {
+            return (new uint256[](0), total);
+        }
+
+        uint256 end = offset + limit;
+        if (end > total) {
+            end = total;
+        }
+
+        uint256 resultLength = end - offset;
+        tokenIds = new uint256[](resultLength);
+
+        for (uint256 i = 0; i < resultLength; i++) {
+            tokenIds[i] = _allTokenIds[offset + i];
+        }
+
+        return (tokenIds, total);
     }
 
     function getTotalCreditTypes() external view returns (uint256) {
