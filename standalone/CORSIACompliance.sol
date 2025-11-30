@@ -1,17 +1,29 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
  * @title CORSIACompliance
- * @dev Registry for CORSIA (Carbon Offsetting and Reduction Scheme for 
+ * @dev Registry for CORSIA (Carbon Offsetting and Reduction Scheme for
  * International Aviation) eligibility.
  *
  * CORSIA has specific requirements for eligible emissions units (EUCs)
  * including vintage year restrictions and program eligibility.
+ *
+ * @notice Security Considerations:
+ * - block.timestamp is used for registration dates. Miner manipulation (~15s)
+ *   is negligible for eligibility periods spanning years.
+ * - All input validation uses custom errors for gas efficiency.
  */
 contract CORSIACompliance is Ownable {
+    // ============ Custom Errors ============
+    error InvalidProjectId();
+    error InvalidVintageRange();
+    error ProgramIdRequired();
+    error EvidenceHashRequired();
+    error InvalidYearRange();
+
     struct CORSIAStatus {
         bool isEligible;
         uint256 registrationDate;
@@ -30,7 +42,7 @@ contract CORSIACompliance is Ownable {
     }
 
     mapping(bytes32 => CORSIAStatus) private _projectStatus;
-    mapping(uint256 => CompliancePeriod) private _compliancePeriods;
+    mapping(uint256 => CompliancePeriod) private _periods;
     uint256 public currentPeriodId;
 
     event CORSIAEligibilitySet(
@@ -50,7 +62,7 @@ contract CORSIACompliance is Ownable {
 
     constructor() Ownable() {
         // Initialize with CORSIA pilot phase (2021-2023)
-        _compliancePeriods[1] = CompliancePeriod({
+        _periods[1] = CompliancePeriod({
             startYear: 2021,
             endYear: 2023,
             vintageFloor: 2016,
@@ -58,7 +70,7 @@ contract CORSIACompliance is Ownable {
         });
 
         // First phase (2024-2026)
-        _compliancePeriods[2] = CompliancePeriod({
+        _periods[2] = CompliancePeriod({
             startYear: 2024,
             endYear: 2026,
             vintageFloor: 2021,
@@ -70,6 +82,14 @@ contract CORSIACompliance is Ownable {
 
     /**
      * @dev Set CORSIA eligibility status for a project.
+     * @param projectId Unique identifier for the project
+     * @param isEligible Whether the project is CORSIA eligible
+     * @param firstEligibleVintage First eligible vintage year
+     * @param lastEligibleVintage Last eligible vintage year
+     * @param programId CORSIA-eligible program identifier
+     * @param evidenceHash IPFS hash of eligibility documentation
+     *
+     * @notice Uses block.timestamp for registration date.
      */
     function setEligibility(
         bytes32 projectId,
@@ -79,11 +99,12 @@ contract CORSIACompliance is Ownable {
         string calldata programId,
         string calldata evidenceHash
     ) external onlyOwner {
-        require(projectId != bytes32(0), "Invalid projectId");
-        require(lastEligibleVintage >= firstEligibleVintage, "Invalid vintage range");
-        require(bytes(programId).length > 0, "Program ID required");
-        require(bytes(evidenceHash).length > 0, "Evidence hash required");
+        if (projectId == bytes32(0)) revert InvalidProjectId();
+        if (lastEligibleVintage < firstEligibleVintage) revert InvalidVintageRange();
+        if (bytes(programId).length == 0) revert ProgramIdRequired();
+        if (bytes(evidenceHash).length == 0) revert EvidenceHashRequired();
 
+        // solhint-disable-next-line not-rely-on-time
         _projectStatus[projectId] = CORSIAStatus({
             isEligible: isEligible,
             registrationDate: block.timestamp,
@@ -104,6 +125,11 @@ contract CORSIACompliance is Ownable {
 
     /**
      * @dev Update compliance period parameters.
+     * @param periodId The period identifier
+     * @param startYear Start year of the compliance period
+     * @param endYear End year of the compliance period
+     * @param vintageFloor Earliest acceptable vintage year
+     * @param isActive Whether this period is currently active
      */
     function setCompliancePeriod(
         uint256 periodId,
@@ -112,9 +138,9 @@ contract CORSIACompliance is Ownable {
         uint256 vintageFloor,
         bool isActive
     ) external onlyOwner {
-        require(endYear >= startYear, "Invalid year range");
-        
-        _compliancePeriods[periodId] = CompliancePeriod({
+        if (endYear < startYear) revert InvalidYearRange();
+
+        _periods[periodId] = CompliancePeriod({
             startYear: startYear,
             endYear: endYear,
             vintageFloor: vintageFloor,
@@ -130,6 +156,8 @@ contract CORSIACompliance is Ownable {
 
     /**
      * @dev Check if project is eligible for CORSIA.
+     * @param projectId The project to check
+     * @return True if project is CORSIA eligible
      */
     function isProjectEligible(bytes32 projectId) external view returns (bool) {
         return _projectStatus[projectId].isEligible;
@@ -138,16 +166,17 @@ contract CORSIACompliance is Ownable {
     /**
      * @dev Check if a specific vintage year is eligible for a compliance period.
      * @param projectId The project identifier
-     * @param compliancePeriod The compliance period ID to check against
+     * @param periodId The compliance period ID to check against
+     * @return True if vintage is eligible for the specified period
      */
-    function isVintageYearEligible(bytes32 projectId, uint256 compliancePeriod) 
-        external 
-        view 
-        returns (bool) 
+    function isVintageYearEligible(bytes32 projectId, uint256 periodId)
+        external
+        view
+        returns (bool)
     {
-        CORSIAStatus memory status = _projectStatus[projectId];
-        CompliancePeriod memory period = _compliancePeriods[compliancePeriod];
-        
+        CORSIAStatus storage status = _projectStatus[projectId];
+        CompliancePeriod storage period = _periods[periodId];
+
         if (!status.isEligible || !period.isActive) {
             return false;
         }
@@ -159,23 +188,27 @@ contract CORSIACompliance is Ownable {
 
     /**
      * @dev Get full CORSIA status for a project.
+     * @param projectId The project to query
+     * @return Full CORSIAStatus struct
      */
-    function getProjectStatus(bytes32 projectId) 
-        external 
-        view 
-        returns (CORSIAStatus memory) 
+    function getProjectStatus(bytes32 projectId)
+        external
+        view
+        returns (CORSIAStatus memory)
     {
         return _projectStatus[projectId];
     }
 
     /**
      * @dev Get compliance period details.
+     * @param periodId The period to query
+     * @return Full CompliancePeriod struct
      */
-    function getCompliancePeriod(uint256 periodId) 
-        external 
-        view 
-        returns (CompliancePeriod memory) 
+    function getCompliancePeriod(uint256 periodId)
+        external
+        view
+        returns (CompliancePeriod memory)
     {
-        return _compliancePeriods[periodId];
+        return _periods[periodId];
     }
 }
