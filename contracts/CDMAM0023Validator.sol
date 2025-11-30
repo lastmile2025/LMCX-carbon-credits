@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/access/AccessControl.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 /**
  * @title CDMAM0023Validator
@@ -24,8 +24,38 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
  * - Leakage: Transportation, energy consumption
  *
  * Reference: UNFCCC CDM Methodology AM0023 Version 05.0
+ *
+ * @notice Uses custom errors for gas efficiency.
  */
 contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
+    // ============ Custom Errors ============
+    error InvalidDOEAddress();
+    error AccreditationRequired();
+    error InvalidProjectId();
+    error AlreadyRegistered();
+    error InvalidStartYear();
+    error InvalidCreditingPeriod();
+    error MaxCreditingPeriodExceeded();
+    error NotRegisteredDOE();
+    error ProjectNotFound();
+    error AlreadyValidated();
+    error ProjectNotRegistered();
+    error InvalidMCF();
+    error InvalidDOC();
+    error InvalidDOCf();
+    error InvalidF();
+    error BaselineNotApproved();
+    error KValueTooHigh();
+    error InvalidPeriod();
+    error InvalidEfficiency();
+    error InvalidIndex();
+    error InvalidCalculation();
+    error MaxUncertaintyExceeded();
+    error NotCalculated();
+    error AlreadyVerified();
+    error NotVerified();
+    error ExceedsNetReductions();
+
     bytes32 public constant VALIDATOR_ROLE = keccak256("VALIDATOR_ROLE");
     bytes32 public constant DOE_ROLE = keccak256("DOE_ROLE");  // Designated Operational Entity
     bytes32 public constant PP_ROLE = keccak256("PP_ROLE");     // Project Participant
@@ -314,8 +344,8 @@ contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
         address doe,
         string calldata accreditationId
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(doe != address(0), "Invalid DOE address");
-        require(bytes(accreditationId).length > 0, "Accreditation required");
+        if (doe == address(0)) revert InvalidDOEAddress();
+        if (bytes(accreditationId).length == 0) revert AccreditationRequired();
 
         registeredDOEs[doe] = true;
         doeAccreditation[doe] = accreditationId;
@@ -339,11 +369,11 @@ contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
         uint256 creditingEndYear,
         string calldata pddHash
     ) external onlyRole(PP_ROLE) {
-        require(projectId != bytes32(0), "Invalid projectId");
-        require(!_projectStatus[projectId].isRegistered, "Already registered");
-        require(creditingStartYear >= 2000, "Invalid start year");
-        require(creditingEndYear > creditingStartYear, "Invalid crediting period");
-        require(creditingEndYear - creditingStartYear <= 21, "Max 21 year period"); // 7+7+7 renewable
+        if (projectId == bytes32(0)) revert InvalidProjectId();
+        if (_projectStatus[projectId].isRegistered) revert AlreadyRegistered();
+        if (creditingStartYear < 2000) revert InvalidStartYear();
+        if (creditingEndYear <= creditingStartYear) revert InvalidCreditingPeriod();
+        if (creditingEndYear - creditingStartYear > 21) revert MaxCreditingPeriodExceeded();
 
         _pdds[projectId] = ProjectDesignDocument({
             projectId: projectId,
@@ -392,9 +422,9 @@ contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
         string calldata validationReportHash,
         string calldata registrationNumber
     ) external onlyRole(DOE_ROLE) {
-        require(registeredDOEs[msg.sender], "Not registered DOE");
-        require(_pdds[projectId].projectId != bytes32(0), "Project not found");
-        require(!_pdds[projectId].isValidated, "Already validated");
+        if (!registeredDOEs[msg.sender]) revert NotRegisteredDOE();
+        if (_pdds[projectId].projectId == bytes32(0)) revert ProjectNotFound();
+        if (_pdds[projectId].isValidated) revert AlreadyValidated();
 
         ProjectDesignDocument storage pdd = _pdds[projectId];
         pdd.isValidated = true;
@@ -425,11 +455,11 @@ contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
         uint256 oxidationFactor,
         string calldata baselineStudyHash
     ) external onlyRole(VALIDATOR_ROLE) {
-        require(_projectStatus[projectId].isRegistered, "Project not registered");
-        require(mcf <= 100, "Invalid MCF (max 100)");
-        require(doc <= 10000, "Invalid DOC");
-        require(docf <= 10000, "Invalid DOCf");
-        require(f <= 10000, "Invalid F");
+        if (!_projectStatus[projectId].isRegistered) revert ProjectNotRegistered();
+        if (mcf > 100) revert InvalidMCF();
+        if (doc > 10000) revert InvalidDOC();
+        if (docf > 10000) revert InvalidDOCf();
+        if (f > 10000) revert InvalidF();
 
         BaselineScenario storage baseline = _baselines[projectId];
         baseline.projectId = projectId;
@@ -455,8 +485,8 @@ contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
         WasteCategory category,
         uint256 kValue
     ) external onlyRole(VALIDATOR_ROLE) {
-        require(_baselines[projectId].isApproved, "Baseline not approved");
-        require(kValue <= 5000, "k value too high (max 0.5)"); // scaled 1e4
+        if (!_baselines[projectId].isApproved) revert BaselineNotApproved();
+        if (kValue > 5000) revert KValueTooHigh(); // scaled 1e4
 
         _baselines[projectId].decayRates[category] = kValue;
     }
@@ -479,9 +509,9 @@ contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
         uint256 electricityConsumed,
         string calldata dataHash
     ) external onlyRole(PP_ROLE) {
-        require(_projectStatus[projectId].isRegistered, "Not registered");
-        require(periodEnd > periodStart, "Invalid period");
-        require(flareEfficiency <= 10000, "Invalid efficiency");
+        if (!_projectStatus[projectId].isRegistered) revert ProjectNotRegistered();
+        if (periodEnd <= periodStart) revert InvalidPeriod();
+        if (flareEfficiency > 10000) revert InvalidEfficiency();
 
         _monitoringData[projectId].push(MonitoringData({
             monitoringId: monitoringId,
@@ -518,8 +548,8 @@ contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
         bytes32 projectId,
         uint256 monitoringIndex
     ) external onlyRole(DOE_ROLE) {
-        require(registeredDOEs[msg.sender], "Not registered DOE");
-        require(monitoringIndex < _monitoringData[projectId].length, "Invalid index");
+        if (!registeredDOEs[msg.sender]) revert NotRegisteredDOE();
+        if (monitoringIndex >= _monitoringData[projectId].length) revert InvalidIndex();
 
         _monitoringData[projectId][monitoringIndex].isVerified = true;
         _monitoringData[projectId][monitoringIndex].verifiedBy = msg.sender;
@@ -540,9 +570,9 @@ contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
         uint256 uncertaintyDeduction,
         string calldata calculationHash
     ) external onlyRole(VALIDATOR_ROLE) nonReentrant {
-        require(_projectStatus[projectId].isRegistered, "Not registered");
-        require(baselineEmissions >= projectEmissions + leakageEmissions, "Invalid calculation");
-        require(uncertaintyDeduction <= 2000, "Max 20% uncertainty deduction");
+        if (!_projectStatus[projectId].isRegistered) revert ProjectNotRegistered();
+        if (baselineEmissions < projectEmissions + leakageEmissions) revert InvalidCalculation();
+        if (uncertaintyDeduction > 2000) revert MaxUncertaintyExceeded();
 
         // Write directly to storage to avoid stack too deep
         EmissionReduction storage er = _vintageReductions[projectId][vintageYear];
@@ -576,11 +606,11 @@ contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
         bytes32 projectId,
         uint256 vintageYear
     ) external onlyRole(DOE_ROLE) {
-        require(registeredDOEs[msg.sender], "Not registered DOE");
+        if (!registeredDOEs[msg.sender]) revert NotRegisteredDOE();
 
         EmissionReduction storage er = _vintageReductions[projectId][vintageYear];
-        require(er.isCalculated, "Not calculated");
-        require(!er.isVerified, "Already verified");
+        if (!er.isCalculated) revert NotCalculated();
+        if (er.isVerified) revert AlreadyVerified();
 
         er.isVerified = true;
     }
@@ -594,8 +624,8 @@ contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
         uint256 cersIssued
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
         EmissionReduction storage er = _vintageReductions[projectId][vintageYear];
-        require(er.isVerified, "Not verified");
-        require(cersIssued <= er.netReductions, "Exceeds net reductions");
+        if (!er.isVerified) revert NotVerified();
+        if (cersIssued > er.netReductions) revert ExceedsNetReductions();
 
         er.isCertified = true;
         er.cersIssued = cersIssued;
@@ -736,7 +766,7 @@ contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
         view
         returns (MonitoringData memory)
     {
-        require(index < _monitoringData[projectId].length, "Invalid index");
+        if (index >= _monitoringData[projectId].length) revert InvalidIndex();
         return _monitoringData[projectId][index];
     }
 
@@ -824,7 +854,7 @@ contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
         string calldata cdmProjectNumber,
         string calldata pddHash
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(projectId != bytes32(0), "Invalid projectId");
+        if (projectId == bytes32(0)) revert InvalidProjectId();
 
         CDMStatus storage status = _projectStatus[projectId];
         status.projectId = projectId;

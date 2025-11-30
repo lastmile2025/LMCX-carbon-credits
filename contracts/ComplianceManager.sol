@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/access/AccessControl.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 /// @notice Interface for the ERC1155 token contract
 interface ILMCXCarbonCredit {
@@ -82,6 +82,31 @@ interface ICDMAM0023Validator {
  *  4. Only this contract is granted COMPLIANCE_MANAGER_ROLE on the token.
  */
 contract ComplianceManager is AccessControl, ReentrancyGuard {
+    // ============ Custom Errors ============
+    error InvalidTokenContract();
+    error InvalidISO14064Validator();
+    error InvalidOGMPValidator();
+    error InvalidISOVerifier();
+    error InvalidCORSIAContract();
+    error InvalidEPAValidator();
+    error InvalidCDMValidator();
+    error InvalidBeneficiary();
+    error AmountMustBePositive();
+    error InvalidProjectId();
+    error InvalidVintageYear();
+    error MethodologyRequired();
+    error VerificationHashRequired();
+    error AlreadyMinted();
+    error ISO14064NonCompliant();
+    error OGMPNonCompliant();
+    error ISONotVerified();
+    error NotCORSIAEligible();
+    error EPANonCompliant();
+    error CDMNonCompliant();
+    error VintageNotEligible();
+    error NotYetMinted();
+    error InvalidRequestId();
+
     bytes32 public constant ADMIN_ROLE  = keccak256("ADMIN_ROLE");
     bytes32 public constant ISSUER_ROLE = keccak256("ISSUER_ROLE");
 
@@ -170,13 +195,13 @@ contract ComplianceManager is AccessControl, ReentrancyGuard {
         address _epaSubpartWValidator,
         address _cdmAM0023Validator
     ) {
-        require(_tokenContract != address(0), "Invalid token contract");
-        require(_iso14064Validator != address(0), "Invalid ISO 14064 validator");
-        require(_ogmpValidator != address(0), "Invalid OGMP validator");
-        require(_isoVerifier != address(0), "Invalid ISO verifier");
-        require(_corsiaCompliance != address(0), "Invalid CORSIA contract");
-        require(_epaSubpartWValidator != address(0), "Invalid EPA validator");
-        require(_cdmAM0023Validator != address(0), "Invalid CDM validator");
+        if (_tokenContract == address(0)) revert InvalidTokenContract();
+        if (_iso14064Validator == address(0)) revert InvalidISO14064Validator();
+        if (_ogmpValidator == address(0)) revert InvalidOGMPValidator();
+        if (_isoVerifier == address(0)) revert InvalidISOVerifier();
+        if (_corsiaCompliance == address(0)) revert InvalidCORSIAContract();
+        if (_epaSubpartWValidator == address(0)) revert InvalidEPAValidator();
+        if (_cdmAM0023Validator == address(0)) revert InvalidCDMValidator();
 
         tokenContract = ILMCXCarbonCredit(_tokenContract);
         iso14064Validator = IISO14064Validator(_iso14064Validator);
@@ -202,12 +227,12 @@ contract ComplianceManager is AccessControl, ReentrancyGuard {
         string calldata methodology,
         string calldata verificationHash
     ) external onlyRole(ISSUER_ROLE) returns (uint256 requestId) {
-        require(beneficiary != address(0), "Invalid beneficiary");
-        require(amount > 0, "Amount must be > 0");
-        require(projectId != bytes32(0), "Invalid projectId");
-        require(vintageYear >= 2000 && vintageYear <= 2100, "Invalid vintage year");
-        require(bytes(methodology).length > 0, "Methodology required");
-        require(bytes(verificationHash).length > 0, "Verification hash required");
+        if (beneficiary == address(0)) revert InvalidBeneficiary();
+        if (amount == 0) revert AmountMustBePositive();
+        if (projectId == bytes32(0)) revert InvalidProjectId();
+        if (vintageYear < 2000 || vintageYear > 2100) revert InvalidVintageYear();
+        if (bytes(methodology).length == 0) revert MethodologyRequired();
+        if (bytes(verificationHash).length == 0) revert VerificationHashRequired();
 
         requestId = nextRequestId;
         nextRequestId += 1;
@@ -336,7 +361,7 @@ contract ComplianceManager is AccessControl, ReentrancyGuard {
      */
     function approveMinting(uint256 requestId) external onlyRole(ADMIN_ROLE) nonReentrant {
         MintingRequest storage r = _getExistingRequest(requestId);
-        require(!r.minted, "Already minted");
+        if (r.minted) revert AlreadyMinted();
 
         // If no checks have been run yet, run them now
         if (
@@ -352,15 +377,15 @@ contract ComplianceManager is AccessControl, ReentrancyGuard {
         }
 
         // Primary requirement: ISO 14064-2/3 compliance
-        require(r.iso14064Compliant, "ISO 14064-2/3 non-compliant");
+        if (!r.iso14064Compliant) revert ISO14064NonCompliant();
 
         // Secondary requirements for highest integrity
-        require(r.ogmpCompliant, "OGMP2 non-compliant");
-        require(r.isoVerified, "ISO14065 not verified");
-        require(r.corsiaEligible, "Not CORSIA-eligible");
-        require(r.epaSubpartWCompliant, "EPA Subpart W non-compliant");
-        require(r.cdmAM0023Compliant, "CDM AM0023 non-compliant");
-        require(r.vintageEligible, "Vintage not eligible");
+        if (!r.ogmpCompliant) revert OGMPNonCompliant();
+        if (!r.isoVerified) revert ISONotVerified();
+        if (!r.corsiaEligible) revert NotCORSIAEligible();
+        if (!r.epaSubpartWCompliant) revert EPANonCompliant();
+        if (!r.cdmAM0023Compliant) revert CDMNonCompliant();
+        if (!r.vintageEligible) revert VintageNotEligible();
 
         r.approved = true;
         emit MintApproved(requestId, msg.sender);
@@ -391,7 +416,7 @@ contract ComplianceManager is AccessControl, ReentrancyGuard {
         onlyRole(ADMIN_ROLE)
     {
         MintingRequest storage r = _getExistingRequest(requestId);
-        require(!r.minted, "Already minted");
+        if (r.minted) revert AlreadyMinted();
         // no state change besides the event; off-chain systems can treat this as final
         emit MintRejected(requestId, reason);
     }
@@ -452,7 +477,7 @@ contract ComplianceManager is AccessControl, ReentrancyGuard {
      */
     function getTokenId(uint256 requestId) external view returns (uint256) {
         MintingRequest storage r = _getExistingRequest(requestId);
-        require(r.minted, "Not yet minted");
+        if (!r.minted) revert NotYetMinted();
         return r.tokenId;
     }
 
@@ -461,12 +486,12 @@ contract ComplianceManager is AccessControl, ReentrancyGuard {
      */
     function getMintId(uint256 requestId) external view returns (uint256) {
         MintingRequest storage r = _getExistingRequest(requestId);
-        require(r.minted, "Not yet minted");
+        if (!r.minted) revert NotYetMinted();
         return r.mintId;
     }
 
     function _getExistingRequest(uint256 requestId) internal view returns (MintingRequest storage) {
-        require(requestId < nextRequestId, "Invalid requestId");
+        if (requestId >= nextRequestId) revert InvalidRequestId();
         return _requests[requestId];
     }
 }

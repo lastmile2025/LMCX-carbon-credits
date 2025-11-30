@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/access/AccessControl.sol";
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /**
  * @title SMARTDataRegistry
