@@ -20,6 +20,13 @@ import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
  * - Invalidation Risk: Coverage if credits are invalidated
  * - Delivery Risk: Coverage for non-delivery of promised credits
  * - Political Risk: Coverage for regulatory/political changes
+ *
+ * @notice Security Considerations:
+ * - block.timestamp is used for policy dates, expiration, and claims timing.
+ *   Miners can manipulate timestamps by ~15 seconds, which is negligible
+ *   for insurance policies spanning days, months, or years.
+ * - All functions modifying state are protected by appropriate access controls.
+ * - ReentrancyGuard prevents reentrancy attacks on premium/claim payments.
  */
 contract InsuranceManager is AccessControl, ReentrancyGuard {
     bytes32 public constant INSURER_ROLE = keccak256("INSURER_ROLE");
