@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
  * @title ISO14065Verifier
@@ -15,9 +15,17 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  * - block.timestamp is used for verification dates and expiration checks.
  *   Miners can manipulate timestamps by ~15 seconds, which is negligible
  *   for verification periods spanning months or years.
- * - All input validation uses require() for proper error handling.
+ * - All input validation uses custom errors for gas efficiency.
  */
 contract ISO14065Verifier is Ownable {
+    // ============ Custom Errors ============
+    error InvalidProjectId();
+    error InvalidVerificationBody();
+    error ExpirationMustBeFuture();
+    error CertificateHashRequired();
+    error AccreditationIdRequired();
+    error ProjectNotVerified();
+
     constructor() Ownable() {}
 
     struct VerificationStatus {
@@ -63,12 +71,12 @@ contract ISO14065Verifier is Ownable {
         string calldata certificateHash,
         string calldata accreditationId
     ) external onlyOwner {
-        require(projectId != bytes32(0), "Invalid projectId");
-        require(verificationBody != address(0), "Invalid verification body");
+        if (projectId == bytes32(0)) revert InvalidProjectId();
+        if (verificationBody == address(0)) revert InvalidVerificationBody();
         // solhint-disable-next-line not-rely-on-time
-        require(expirationDate > block.timestamp, "Expiration must be future");
-        require(bytes(certificateHash).length > 0, "Certificate hash required");
-        require(bytes(accreditationId).length > 0, "Accreditation ID required");
+        if (expirationDate <= block.timestamp) revert ExpirationMustBeFuture();
+        if (bytes(certificateHash).length == 0) revert CertificateHashRequired();
+        if (bytes(accreditationId).length == 0) revert AccreditationIdRequired();
 
         // solhint-disable-next-line not-rely-on-time
         _verifications[projectId] = VerificationStatus({
@@ -98,7 +106,7 @@ contract ISO14065Verifier is Ownable {
         external
         onlyOwner
     {
-        require(_verifications[projectId].isVerified, "Not verified");
+        if (!_verifications[projectId].isVerified) revert ProjectNotVerified();
         _verifications[projectId].isVerified = false;
         emit VerificationRevoked(projectId, reason);
     }
