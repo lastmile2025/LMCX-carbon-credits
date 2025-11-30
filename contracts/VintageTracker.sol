@@ -630,21 +630,20 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
             creditProvenance[creditId].length
         ));
 
-        ProvenanceEntry memory entry = ProvenanceEntry({
-            entryId: entryId,
-            creditId: creditId,
-            fromState: fromState,
-            toState: toState,
-            fromAddress: fromAddress,
-            toAddress: toAddress,
-            timestamp: block.timestamp,
-            transactionHash: bytes32(0), // Can be set externally
-            action: action,
-            metadata: metadata
-        });
+        // Write directly to storage to avoid stack too deep
+        ProvenanceEntry storage entry = provenanceEntries[entryId];
+        entry.entryId = entryId;
+        entry.creditId = creditId;
+        entry.fromState = fromState;
+        entry.toState = toState;
+        entry.fromAddress = fromAddress;
+        entry.toAddress = toAddress;
+        entry.timestamp = block.timestamp;
+        entry.transactionHash = bytes32(0);
+        entry.action = action;
+        entry.metadata = metadata;
 
         creditProvenance[creditId].push(entry);
-        provenanceEntries[entryId] = entry;
     }
 
     /**

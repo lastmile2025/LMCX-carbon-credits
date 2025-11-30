@@ -380,7 +380,7 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
         bytes32 dataHash,
         uint256 confidence,
         string calldata sourceRef
-    ) external onlyActiveOracle feedExists(feedId) whenNotPaused {
+    ) external onlyActiveOracle feedExists(feedId) whenNotPaused nonReentrant {
         require(dataFeeds[feedId].isActive, "Feed not active");
         require(confidence <= 10000, "Invalid confidence");
         require(!circuitBreakerActive, "Circuit breaker active");
@@ -392,19 +392,17 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
             block.timestamp
         ));
 
-        OracleSubmission memory submission = OracleSubmission({
-            submissionId: submissionId,
-            dataFeedId: feedId,
-            oracle: msg.sender,
-            value: value,
-            timestamp: block.timestamp,
-            dataHash: dataHash,
-            confidence: confidence,
-            isValid: true,
-            sourceRef: sourceRef
-        });
-
-        submissions[submissionId] = submission;
+        // Write directly to storage to avoid stack too deep
+        OracleSubmission storage submission = submissions[submissionId];
+        submission.submissionId = submissionId;
+        submission.dataFeedId = feedId;
+        submission.oracle = msg.sender;
+        submission.value = value;
+        submission.timestamp = block.timestamp;
+        submission.dataHash = dataHash;
+        submission.confidence = confidence;
+        submission.isValid = true;
+        submission.sourceRef = sourceRef;
 
         // Check if oracle already submitted for this feed in current round
         bool isNewSubmitter = true;
@@ -419,7 +417,17 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
             feedOracleSubmitters[feedId].push(msg.sender);
         }
 
-        feedSubmissions[feedId][msg.sender] = submission;
+        // Copy to feedSubmissions
+        OracleSubmission storage feedSub = feedSubmissions[feedId][msg.sender];
+        feedSub.submissionId = submissionId;
+        feedSub.dataFeedId = feedId;
+        feedSub.oracle = msg.sender;
+        feedSub.value = value;
+        feedSub.timestamp = block.timestamp;
+        feedSub.dataHash = dataHash;
+        feedSub.confidence = confidence;
+        feedSub.isValid = true;
+        feedSub.sourceRef = sourceRef;
 
         // Update oracle stats
         oracles[msg.sender].lastUpdate = block.timestamp;
@@ -464,42 +472,70 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
         bool hasAnomaly = _checkForAnomalies(feedId, values, validCount, feed.maxDeviation);
 
         // Calculate aggregated value based on strategy
-        int256 aggregatedValue;
-        if (feed.strategy == AggregationStrategy.Median) {
-            aggregatedValue = _calculateMedian(values, validCount);
-        } else if (feed.strategy == AggregationStrategy.WeightedMedian) {
-            aggregatedValue = _calculateWeightedMedian(values, weights, validCount);
-        } else if (feed.strategy == AggregationStrategy.TrimmedMean) {
-            aggregatedValue = _calculateTrimmedMean(values, validCount);
-        } else {
-            aggregatedValue = _calculateWeightedAverage(values, weights, validCount);
-        }
+        int256 aggregatedValue = _calculateAggregatedValue(feedId, values, weights, validCount);
 
         // Calculate quality score
         uint256 qualityScore = _calculateQualityScore(feedId, values, validCount, aggregatedValue);
 
-        // Create result arrays of exact size
-        int256[] memory resultValues = new int256[](validCount);
-        address[] memory resultOracles = new address[](validCount);
-        for (uint256 i = 0; i < validCount; i++) {
-            resultValues[i] = values[i];
-            resultOracles[i] = validOracles[i];
+        // Store result directly to storage to avoid stack too deep
+        _storeAggregatedResult(feedId, aggregatedValue, validCount, qualityScore, hasAnomaly, values, validOracles);
+
+        // Clear submissions for next round
+        delete feedOracleSubmitters[feedId];
+
+        emit DataAggregated(feedId, aggregatedValue, validCount, qualityScore);
+    }
+
+    /**
+     * @dev Calculate aggregated value based on feed strategy
+     */
+    function _calculateAggregatedValue(
+        bytes32 feedId,
+        int256[] memory values,
+        uint256[] memory weights,
+        uint256 validCount
+    ) internal view returns (int256) {
+        DataFeed storage feed = dataFeeds[feedId];
+        if (feed.strategy == AggregationStrategy.Median) {
+            return _calculateMedian(values, validCount);
+        } else if (feed.strategy == AggregationStrategy.WeightedMedian) {
+            return _calculateWeightedMedian(values, weights, validCount);
+        } else if (feed.strategy == AggregationStrategy.TrimmedMean) {
+            return _calculateTrimmedMean(values, validCount);
+        } else {
+            return _calculateWeightedAverage(values, weights, validCount);
         }
+    }
 
-        // Store result
-        AggregatedResult memory result = AggregatedResult({
-            feedId: feedId,
-            value: aggregatedValue,
-            timestamp: block.timestamp,
-            oracleCount: validCount,
-            qualityScore: qualityScore,
-            hasAnomaly: hasAnomaly,
-            resultHash: keccak256(abi.encodePacked(feedId, aggregatedValue, block.timestamp)),
-            individualValues: resultValues,
-            participatingOracles: resultOracles
-        });
+    /**
+     * @dev Store aggregated result to storage
+     */
+    function _storeAggregatedResult(
+        bytes32 feedId,
+        int256 aggregatedValue,
+        uint256 validCount,
+        uint256 qualityScore,
+        bool hasAnomaly,
+        int256[] memory values,
+        address[] memory validOracles
+    ) internal {
+        // Write directly to storage
+        AggregatedResult storage result = latestResults[feedId];
+        result.feedId = feedId;
+        result.value = aggregatedValue;
+        result.timestamp = block.timestamp;
+        result.oracleCount = validCount;
+        result.qualityScore = qualityScore;
+        result.hasAnomaly = hasAnomaly;
+        result.resultHash = keccak256(abi.encodePacked(feedId, aggregatedValue, block.timestamp));
 
-        latestResults[feedId] = result;
+        // Clear and populate arrays
+        delete result.individualValues;
+        delete result.participatingOracles;
+        for (uint256 i = 0; i < validCount; i++) {
+            result.individualValues.push(values[i]);
+            result.participatingOracles.push(validOracles[i]);
+        }
 
         // Add to history
         if (resultHistory[feedId].length >= maxHistoryLength) {
@@ -510,11 +546,6 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
             resultHistory[feedId].pop();
         }
         resultHistory[feedId].push(result);
-
-        // Clear submissions for next round
-        delete feedOracleSubmitters[feedId];
-
-        emit DataAggregated(feedId, aggregatedValue, validCount, qualityScore);
     }
 
     // ============ Aggregation Algorithms ============

@@ -539,38 +539,33 @@ contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
         uint256 leakageEmissions,
         uint256 uncertaintyDeduction,
         string calldata calculationHash
-    ) external onlyRole(VALIDATOR_ROLE) {
+    ) external onlyRole(VALIDATOR_ROLE) nonReentrant {
         require(_projectStatus[projectId].isRegistered, "Not registered");
         require(baselineEmissions >= projectEmissions + leakageEmissions, "Invalid calculation");
         require(uncertaintyDeduction <= 2000, "Max 20% uncertainty deduction");
 
-        uint256 grossReductions = baselineEmissions - projectEmissions - leakageEmissions;
-        uint256 adjustment = (grossReductions * uncertaintyDeduction) / 10000;
-        uint256 netReductions = grossReductions - adjustment;
-
-        EmissionReduction memory er = EmissionReduction({
-            monitoringId: monitoringId,
-            projectId: projectId,
-            vintageYear: vintageYear,
-            baselineEmissions: baselineEmissions,
-            projectEmissions: projectEmissions,
-            leakageEmissions: leakageEmissions,
-            grossReductions: grossReductions,
-            netReductions: netReductions,
-            uncertaintyDeduction: uncertaintyDeduction,
-            conservativeAdjustment: adjustment,
-            isCalculated: true,
-            isVerified: false,
-            isCertified: false,
-            cersRequested: 0,
-            cersIssued: 0,
-            issuanceRequestHash: calculationHash
-        });
+        // Write directly to storage to avoid stack too deep
+        EmissionReduction storage er = _vintageReductions[projectId][vintageYear];
+        er.monitoringId = monitoringId;
+        er.projectId = projectId;
+        er.vintageYear = vintageYear;
+        er.baselineEmissions = baselineEmissions;
+        er.projectEmissions = projectEmissions;
+        er.leakageEmissions = leakageEmissions;
+        er.grossReductions = baselineEmissions - projectEmissions - leakageEmissions;
+        er.netReductions = er.grossReductions - (er.grossReductions * uncertaintyDeduction) / 10000;
+        er.uncertaintyDeduction = uncertaintyDeduction;
+        er.conservativeAdjustment = (er.grossReductions * uncertaintyDeduction) / 10000;
+        er.isCalculated = true;
+        er.isVerified = false;
+        er.isCertified = false;
+        er.cersRequested = 0;
+        er.cersIssued = 0;
+        er.issuanceRequestHash = calculationHash;
 
         _emissionReductions[projectId].push(er);
-        _vintageReductions[projectId][vintageYear] = er;
 
-        emit EmissionReductionCalculated(projectId, monitoringId, vintageYear, netReductions);
+        emit EmissionReductionCalculated(projectId, monitoringId, vintageYear, er.netReductions);
         _updateComplianceScore(projectId);
     }
 
