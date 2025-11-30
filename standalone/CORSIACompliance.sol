@@ -48,7 +48,7 @@ contract CORSIACompliance is Ownable {
         uint256 vintageFloor
     );
 
-    constructor() {
+    constructor() Ownable() {
         // Initialize with CORSIA pilot phase (2021-2023)
         _compliancePeriods[1] = CompliancePeriod({
             startYear: 2021,

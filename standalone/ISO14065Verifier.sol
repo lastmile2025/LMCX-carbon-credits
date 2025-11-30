@@ -12,6 +12,8 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  * verified by accredited ISO 14065 bodies.
  */
 contract ISO14065Verifier is Ownable {
+    constructor() Ownable() {}
+
     struct VerificationStatus {
         bool isVerified;
         address verificationBody;
