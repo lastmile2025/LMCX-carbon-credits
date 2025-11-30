@@ -25,10 +25,10 @@
     "CDM"
   ],
   "author": "Last Mile Production, LLC",
-  "license": "MIT",
+  "license": "MPL-2.0",
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^4.0.0",
-    "@openzeppelin/contracts": "^4.9.0",
+    "@openzeppelin/contracts": "^4.9.6",
     "hardhat": "^2.19.0"
   },
   "dependencies": {

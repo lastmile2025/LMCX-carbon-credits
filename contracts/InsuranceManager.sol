@@ -210,6 +210,9 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
         uint256 newScore
     );
 
+    /// @notice Emitted when ETH is received by the contract
+    event EthReceived(address indexed sender, uint256 amount);
+
     constructor(address _carbonCreditToken) {
         carbonCreditToken = IERC1155(_carbonCreditToken);
         
@@ -773,5 +776,9 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
 
     // ============ Receive Function ============
 
-    receive() external payable {}
+    /// @notice Receive ETH deposits for insurance capital
+    /// @dev Emits EthReceived event for tracking all incoming ETH
+    receive() external payable {
+        emit EthReceived(msg.sender, msg.value);
+    }
 }

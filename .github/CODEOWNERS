@@ -1,0 +1,49 @@
+# CODEOWNERS for LMCX Carbon Credits
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# These owners will be automatically requested for review when someone opens
+# a pull request that modifies code that they own.
+
+# Default owners for everything in the repo
+* @lastmile2025/core-team
+
+# Smart Contracts - require smart contract team review
+/contracts/ @lastmile2025/smart-contract-team @lastmile2025/core-team
+
+# Core token contract - requires additional security review
+/contracts/LMCXCarbonCredit.sol @lastmile2025/smart-contract-team @lastmile2025/security-team
+
+# Governance - critical component requiring security review
+/contracts/GovernanceController.sol @lastmile2025/smart-contract-team @lastmile2025/security-team
+
+# Oracle and verification - critical for data integrity
+/contracts/OracleAggregator.sol @lastmile2025/smart-contract-team @lastmile2025/security-team
+/contracts/VerificationRegistry.sol @lastmile2025/smart-contract-team @lastmile2025/security-team
+
+# Insurance contracts - financial component requiring extra review
+/contracts/InsuranceManager.sol @lastmile2025/smart-contract-team @lastmile2025/security-team
+
+# Compliance validators
+/contracts/*Validator.sol @lastmile2025/smart-contract-team @lastmile2025/compliance-team
+/contracts/ComplianceManager.sol @lastmile2025/smart-contract-team @lastmile2025/compliance-team
+/contracts/CORSIACompliance.sol @lastmile2025/smart-contract-team @lastmile2025/compliance-team
+
+# Test files
+/test/ @lastmile2025/smart-contract-team
+
+# CI/CD and DevOps
+/.github/ @lastmile2025/devops-team
+/.github/workflows/ @lastmile2025/devops-team @lastmile2025/core-team
+
+# Documentation
+*.md @lastmile2025/core-team
+/SECURITY.md @lastmile2025/security-team @lastmile2025/core-team
+/LICENSE @lastmile2025/core-team
+
+# Configuration files
+/hardhat.config.js @lastmile2025/smart-contract-team @lastmile2025/devops-team
+/package.json @lastmile2025/core-team
+/package-lock.json @lastmile2025/core-team
+
+# Deployment scripts
+/scripts/ @lastmile2025/smart-contract-team @lastmile2025/devops-team

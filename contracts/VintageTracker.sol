@@ -161,6 +161,9 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
     bytes32[] public jurisdictionList;
     mapping(address => bytes32) public userJurisdiction;
 
+    // Gas optimization: O(1) jurisdiction compatibility lookup
+    mapping(bytes32 => mapping(bytes32 => bool)) public jurisdictionCompatibility;
+
     // Locks
     mapping(bytes32 => LockRecord) public locks;
 
@@ -319,11 +322,15 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
 
     /**
      * @dev Calculate vintage grade and discount based on age
+     * @notice Uses 365.25 days/year average to account for leap years
      */
     function calculateVintageGrade(uint256 vintageYear) public view returns (VintageGrade grade, uint256 discount) {
-        uint256 currentYear = block.timestamp / 365 days + 1970;
-        uint256 age = currentYear - vintageYear;
-        uint256 ageInDays = age * 365 days;
+        // Use 365.25 days average to account for leap years (more accurate over long periods)
+        // Multiplied by 4 to avoid decimals: (timestamp * 4) / (1461 days) where 1461 = 365.25 * 4
+        uint256 currentYear = (block.timestamp * 4) / (1461 days) + 1970;
+        uint256 age = currentYear > vintageYear ? currentYear - vintageYear : 0;
+        // Calculate age in seconds using average year length
+        uint256 ageInDays = (age * 1461 days) / 4;
 
         if (ageInDays <= discountSchedule.premiumMaxAge) {
             return (VintageGrade.Premium, discountSchedule.premiumDiscount);
@@ -356,9 +363,10 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
             emit VintageGradeUpdated(creditId, newGrade, newDiscount);
         }
 
-        // Check if vintage has expired
-        uint256 currentYear = block.timestamp / 365 days + 1970;
-        if ((currentYear - record.vintageYear) * 365 days > MAX_VINTAGE_AGE) {
+        // Check if vintage has expired (using leap year aware calculation)
+        uint256 currentYear = (block.timestamp * 4) / (1461 days) + 1970;
+        uint256 ageInYears = currentYear > record.vintageYear ? currentYear - record.vintageYear : 0;
+        if ((ageInYears * 1461 days) / 4 > MAX_VINTAGE_AGE) {
             _transitionState(creditId, LifecycleState.Expired, "expire");
         }
     }
@@ -702,6 +710,9 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         require(geofences[fromJurisdiction].isActive, "Source jurisdiction not active");
         require(geofences[toJurisdiction].isActive, "Target jurisdiction not active");
 
+        // Gas optimization: Set O(1) lookup mapping
+        jurisdictionCompatibility[fromJurisdiction][toJurisdiction] = true;
+        // Keep array for enumeration if needed
         geofences[fromJurisdiction].compatibleJurisdictions.push(toJurisdiction);
     }
 
@@ -734,15 +745,8 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         if (toJurisdiction != creditJurisdiction) {
             require(geofence.allowsInternationalTransfer, "International transfer not allowed");
 
-            // Check if target jurisdiction is compatible
-            bool isCompatible = false;
-            for (uint256 i = 0; i < geofence.compatibleJurisdictions.length; i++) {
-                if (geofence.compatibleJurisdictions[i] == toJurisdiction) {
-                    isCompatible = true;
-                    break;
-                }
-            }
-            require(isCompatible, "Incompatible jurisdiction");
+            // Gas optimization: O(1) lookup instead of O(n) loop
+            require(jurisdictionCompatibility[creditJurisdiction][toJurisdiction], "Incompatible jurisdiction");
         }
     }
 
