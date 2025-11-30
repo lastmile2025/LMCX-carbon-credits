@@ -22,39 +22,6 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
     bytes32 public constant VOTER_ROLE = keccak256("VOTER_ROLE");
     bytes32 public constant MULTISIG_SIGNER_ROLE = keccak256("MULTISIG_SIGNER_ROLE");
 
-    // ============ Custom Errors ============
-    error GovernancePaused();
-    error NotGuardian();
-    error DelayTooShort();
-    error VotingPeriodTooShort();
-    error InvalidQuorum();
-    error InvalidThreshold();
-    error InvalidProposalLength();
-    error EmptyProposal();
-    error EmptyDescription();
-    error BelowProposalThreshold();
-    error VotingNotActive();
-    error AlreadyVoted();
-    error NoVotingPower();
-    error ProposalNotFound();
-    error MultiSigNotRequired();
-    error AlreadySigned();
-    error InvalidStateForSigning();
-    error ProposalNotSucceeded();
-    error TransactionAlreadyQueued();
-    error ProposalNotQueued();
-    error MissingRequiredSignatures();
-    error TimelockNotExpired();
-    error ProposalExpired();
-    error TransactionExecutionFailed();
-    error CannotCancel();
-    error NotAuthorizedToCancel();
-    error UnknownProposal();
-    error CannotVetoInCurrentState();
-    error InvalidDelay();
-    error InvalidPeriod();
-    error InvalidMultiplier();
-
     // ============ Constants ============
     uint256 public constant MIN_PROPOSAL_DELAY = 1 days;
     uint256 public constant MAX_PROPOSAL_DELAY = 30 days;
@@ -259,12 +226,12 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
     // ============ Modifiers ============
 
     modifier whenNotPaused() {
-        if (paused) revert GovernancePaused();
+        require(!paused, "Governance: paused");
         _;
     }
 
     modifier onlyGuardian() {
-        if (!hasRole(GUARDIAN_ROLE, msg.sender)) revert NotGuardian();
+        require(hasRole(GUARDIAN_ROLE, msg.sender), "Governance: not guardian");
         _;
     }
 
@@ -280,10 +247,10 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
         address[] memory _guardians,
         address[] memory _multiSigSigners
     ) {
-        if (_proposalDelay < MIN_PROPOSAL_DELAY) revert DelayTooShort();
-        if (_votingPeriod < MIN_VOTING_PERIOD) revert VotingPeriodTooShort();
-        if (_quorumNumerator > QUORUM_DENOMINATOR) revert InvalidQuorum();
-        if (_multiSigThreshold == 0 || _multiSigThreshold > _multiSigSigners.length) revert InvalidThreshold();
+        require(_proposalDelay >= MIN_PROPOSAL_DELAY, "Delay too short");
+        require(_votingPeriod >= MIN_VOTING_PERIOD, "Voting period too short");
+        require(_quorumNumerator <= QUORUM_DENOMINATOR, "Invalid quorum");
+        require(_multiSigThreshold > 0 && _multiSigThreshold <= _multiSigSigners.length, "Invalid threshold");
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(PROPOSER_ROLE, msg.sender);
@@ -333,33 +300,15 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
         string memory description,
         ProposalCategory category
     ) external onlyRole(PROPOSER_ROLE) whenNotPaused returns (uint256) {
-        if (targets.length != values.length) revert InvalidProposalLength();
-        if (targets.length != calldatas.length) revert InvalidProposalLength();
-        if (targets.length == 0) revert EmptyProposal();
-        if (bytes(description).length == 0) revert EmptyDescription();
+        require(targets.length == values.length, "Invalid proposal length");
+        require(targets.length == calldatas.length, "Invalid proposal length");
+        require(targets.length > 0, "Empty proposal");
+        require(bytes(description).length > 0, "Empty description");
 
         uint256 proposerVotes = getVotes(msg.sender);
-        if (proposerVotes < config.proposalThreshold) revert BelowProposalThreshold();
+        require(proposerVotes >= config.proposalThreshold, "Below proposal threshold");
 
         uint256 proposalId = ++proposalCount;
-
-        _createProposal(proposalId, targets, values, calldatas, signatures, description, category);
-
-        return proposalId;
-    }
-
-    /**
-     * @dev Internal helper to create proposal (reduces stack depth in propose)
-     */
-    function _createProposal(
-        uint256 proposalId,
-        address[] memory targets,
-        uint256[] memory values,
-        bytes[] memory calldatas,
-        string[] memory signatures,
-        string memory description,
-        ProposalCategory category
-    ) internal {
         uint256 startBlock = block.number + (config.proposalDelay / 12); // Assuming ~12s blocks
         uint256 endBlock = startBlock + (config.votingPeriod / 12);
 
@@ -391,6 +340,8 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
             endBlock,
             description
         );
+
+        return proposalId;
     }
 
     /**
@@ -439,13 +390,13 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
         VoteType support,
         string memory reason
     ) internal returns (uint256) {
-        if (state(proposalId) != ProposalState.Active) revert VotingNotActive();
+        require(state(proposalId) == ProposalState.Active, "Voting not active");
 
         Receipt storage receipt = receipts[proposalId][voter];
-        if (receipt.hasVoted) revert AlreadyVoted();
+        require(!receipt.hasVoted, "Already voted");
 
         uint256 votes = getVotes(voter);
-        if (votes == 0) revert NoVotingPower();
+        require(votes > 0, "No voting power");
 
         receipt.hasVoted = true;
         receipt.support = support;
@@ -472,12 +423,11 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
      */
     function signProposal(uint256 proposalId) external onlyRole(MULTISIG_SIGNER_ROLE) {
         Proposal storage proposal = proposals[proposalId];
-        if (proposal.id == 0) revert ProposalNotFound();
-        if (proposal.requiredSignatures == 0) revert MultiSigNotRequired();
-        if (proposalSignatures[proposalId][msg.sender]) revert AlreadySigned();
-        ProposalState currentState = state(proposalId);
-        if (currentState != ProposalState.Succeeded && currentState != ProposalState.Queued)
-            revert InvalidStateForSigning();
+        require(proposal.id != 0, "Proposal does not exist");
+        require(proposal.requiredSignatures > 0, "Multi-sig not required");
+        require(!proposalSignatures[proposalId][msg.sender], "Already signed");
+        require(state(proposalId) == ProposalState.Succeeded ||
+                state(proposalId) == ProposalState.Queued, "Invalid state for signing");
 
         proposalSignatures[proposalId][msg.sender] = true;
         proposal.signatureCount++;
@@ -506,7 +456,7 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
      * @dev Queue a successful proposal for execution
      */
     function queue(uint256 proposalId) external {
-        if (state(proposalId) != ProposalState.Succeeded) revert ProposalNotSucceeded();
+        require(state(proposalId) == ProposalState.Succeeded, "Proposal not succeeded");
 
         Proposal storage proposal = proposals[proposalId];
         uint256 eta = block.timestamp + config.timelockDelay;
@@ -521,7 +471,7 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
                     eta
                 )
             );
-            if (queuedTransactions[txHash]) revert TransactionAlreadyQueued();
+            require(!queuedTransactions[txHash], "Transaction already queued");
             queuedTransactions[txHash] = true;
         }
 
@@ -533,12 +483,12 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
      * @dev Execute a queued proposal
      */
     function execute(uint256 proposalId) external payable onlyRole(EXECUTOR_ROLE) nonReentrant {
-        if (state(proposalId) != ProposalState.Queued) revert ProposalNotQueued();
-        if (!hasRequiredSignatures(proposalId)) revert MissingRequiredSignatures();
+        require(state(proposalId) == ProposalState.Queued, "Proposal not queued");
+        require(hasRequiredSignatures(proposalId), "Missing required signatures");
 
         Proposal storage proposal = proposals[proposalId];
-        if (block.timestamp < proposal.eta) revert TimelockNotExpired();
-        if (block.timestamp > proposal.eta + GRACE_PERIOD) revert ProposalExpired();
+        require(block.timestamp >= proposal.eta, "Timelock not expired");
+        require(block.timestamp <= proposal.eta + GRACE_PERIOD, "Proposal expired");
 
         proposal.executed = true;
 
@@ -565,7 +515,7 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
             }
 
             (bool success, ) = proposal.targets[i].call{value: proposal.values[i]}(callData);
-            if (!success) revert TransactionExecutionFailed();
+            require(success, "Transaction execution failed");
         }
 
         emit ProposalExecuted(proposalId);
@@ -576,15 +526,20 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
      */
     function cancel(uint256 proposalId) external {
         ProposalState currentState = state(proposalId);
-        if (currentState == ProposalState.Canceled ||
-            currentState == ProposalState.Defeated ||
-            currentState == ProposalState.Expired ||
-            currentState == ProposalState.Executed)
-            revert CannotCancel();
+        require(
+            currentState != ProposalState.Canceled &&
+            currentState != ProposalState.Defeated &&
+            currentState != ProposalState.Expired &&
+            currentState != ProposalState.Executed,
+            "Cannot cancel"
+        );
 
         Proposal storage proposal = proposals[proposalId];
-        if (msg.sender != proposal.proposer && !hasRole(GUARDIAN_ROLE, msg.sender))
-            revert NotAuthorizedToCancel();
+        require(
+            msg.sender == proposal.proposer ||
+            hasRole(GUARDIAN_ROLE, msg.sender),
+            "Not authorized to cancel"
+        );
 
         proposal.canceled = true;
 
@@ -675,7 +630,7 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
      */
     function state(uint256 proposalId) public view returns (ProposalState) {
         Proposal storage proposal = proposals[proposalId];
-        if (proposal.id == 0) revert UnknownProposal();
+        require(proposal.id != 0, "Unknown proposal");
 
         if (proposal.canceled) {
             return ProposalState.Canceled;
@@ -776,10 +731,12 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
      */
     function guardianVeto(uint256 proposalId, string calldata reason) external onlyGuardian {
         ProposalState currentState = state(proposalId);
-        if (currentState != ProposalState.Active &&
-            currentState != ProposalState.Succeeded &&
-            currentState != ProposalState.Queued)
-            revert CannotVetoInCurrentState();
+        require(
+            currentState == ProposalState.Active ||
+            currentState == ProposalState.Succeeded ||
+            currentState == ProposalState.Queued,
+            "Cannot veto in current state"
+        );
 
         proposals[proposalId].canceled = true;
         emit GuardianAction(string(abi.encodePacked("VETO:", reason)), proposalId, msg.sender);
@@ -797,9 +754,9 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
         uint256 newTimelockDelay,
         uint256 newQuorumNumerator
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (newProposalDelay < MIN_PROPOSAL_DELAY || newProposalDelay > MAX_PROPOSAL_DELAY) revert InvalidDelay();
-        if (newVotingPeriod < MIN_VOTING_PERIOD || newVotingPeriod > MAX_VOTING_PERIOD) revert InvalidPeriod();
-        if (newQuorumNumerator > QUORUM_DENOMINATOR) revert InvalidQuorum();
+        require(newProposalDelay >= MIN_PROPOSAL_DELAY && newProposalDelay <= MAX_PROPOSAL_DELAY, "Invalid delay");
+        require(newVotingPeriod >= MIN_VOTING_PERIOD && newVotingPeriod <= MAX_VOTING_PERIOD, "Invalid period");
+        require(newQuorumNumerator <= QUORUM_DENOMINATOR, "Invalid quorum");
 
         config.proposalDelay = newProposalDelay;
         config.votingPeriod = newVotingPeriod;
@@ -813,7 +770,7 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
      * @dev Update multi-sig threshold
      */
     function updateMultiSigThreshold(uint256 newThreshold) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (newThreshold == 0 || newThreshold > multiSigConfig.signerCount) revert InvalidThreshold();
+        require(newThreshold > 0 && newThreshold <= multiSigConfig.signerCount, "Invalid threshold");
         multiSigConfig.threshold = newThreshold;
     }
 
@@ -821,7 +778,7 @@ contract GovernanceController is AccessControl, ReentrancyGuard {
      * @dev Set role voting multiplier
      */
     function setRoleVotingMultiplier(bytes32 role, uint256 multiplier) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (multiplier < 10000 || multiplier > 30000) revert InvalidMultiplier(); // 1x to 3x
+        require(multiplier >= 10000 && multiplier <= 30000, "Invalid multiplier"); // 1x to 3x
         roleVotingMultiplier[role] = multiplier;
     }
 

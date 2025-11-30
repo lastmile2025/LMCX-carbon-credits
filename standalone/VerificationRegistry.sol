@@ -27,30 +27,6 @@ contract VerificationRegistry is AccessControl, ReentrancyGuard {
     bytes32 public constant REGISTRY_ADMIN_ROLE = keccak256("REGISTRY_ADMIN_ROLE");
     bytes32 public constant PROOF_SUBMITTER_ROLE = keccak256("PROOF_SUBMITTER_ROLE");
 
-    // ============ Custom Errors ============
-    error RecordExists();
-    error InvalidProjectId();
-    error InvalidMerkleRoot();
-    error InsufficientRequiredSignatures();
-    error RecordNotFound();
-    error ProofExists();
-    error InvalidRecordStatus();
-    error ArrayMismatch();
-    error BatchTooLarge();
-    error AlreadyRegistered();
-    error InvalidReputation();
-    error InvalidStatus();
-    error AlreadySigned();
-    error InvalidSignature();
-    error EmptyBatch();
-    error BatchNotFound();
-    error AlreadyFinalized();
-    error EmptyLeaves();
-    error ProofNotFound();
-    error NoVerificationRecord();
-    error NotVerified();
-    error NotAVerifier();
-
     // ============ Constants ============
     uint256 public constant MIN_VERIFIER_SIGNATURES = 2;
     uint256 public constant PROOF_VALIDITY_PERIOD = 365 days;
@@ -279,10 +255,10 @@ contract VerificationRegistry is AccessControl, ReentrancyGuard {
         bytes32 methodologyHash,
         uint256 vintageYear
     ) external onlyRole(PROOF_SUBMITTER_ROLE) returns (bytes32) {
-        if (records[recordId].recordId != bytes32(0)) revert RecordExists();
-        if (projectId == bytes32(0)) revert InvalidProjectId();
-        if (merkleRoot == bytes32(0)) revert InvalidMerkleRoot();
-        if (requiredSignatures < MIN_VERIFIER_SIGNATURES) revert InsufficientRequiredSignatures();
+        require(records[recordId].recordId == bytes32(0), "Record exists");
+        require(projectId != bytes32(0), "Invalid projectId");
+        require(merkleRoot != bytes32(0), "Invalid merkleRoot");
+        require(requiredSignatures >= MIN_VERIFIER_SIGNATURES, "Insufficient required signatures");
 
         records[recordId] = VerificationRecord({
             recordId: recordId,
@@ -322,7 +298,7 @@ contract VerificationRegistry is AccessControl, ReentrancyGuard {
         external
         onlyRole(REGISTRY_ADMIN_ROLE)
     {
-        if (records[recordId].recordId == bytes32(0)) revert RecordNotFound();
+        require(records[recordId].recordId != bytes32(0), "Record not found");
         records[recordId].arweaveHash = arweaveHash;
     }
 
@@ -339,10 +315,10 @@ contract VerificationRegistry is AccessControl, ReentrancyGuard {
         bytes calldata proof,
         string calldata storageRef
     ) external onlyRole(PROOF_SUBMITTER_ROLE) {
-        if (proofs[proofId].proofId != bytes32(0)) revert ProofExists();
-        if (records[recordId].recordId == bytes32(0)) revert RecordNotFound();
-        if (records[recordId].status != VerificationStatus.Pending &&
-            records[recordId].status != VerificationStatus.InProgress) revert InvalidRecordStatus();
+        require(proofs[proofId].proofId == bytes32(0), "Proof exists");
+        require(records[recordId].recordId != bytes32(0), "Record not found");
+        require(records[recordId].status == VerificationStatus.Pending ||
+                records[recordId].status == VerificationStatus.InProgress, "Invalid record status");
 
         proofs[proofId] = ProofEntry({
             proofId: proofId,
@@ -374,7 +350,7 @@ contract VerificationRegistry is AccessControl, ReentrancyGuard {
         bytes32[] calldata merkleProof
     ) external view returns (bool) {
         VerificationRecord storage record = records[recordId];
-        if (record.recordId == bytes32(0)) revert RecordNotFound();
+        require(record.recordId != bytes32(0), "Record not found");
 
         return merkleProof.verify(record.merkleRoot, leaf);
     }
@@ -387,11 +363,11 @@ contract VerificationRegistry is AccessControl, ReentrancyGuard {
         bytes32[] calldata leaves,
         bytes32[][] calldata merkleProofs
     ) external view returns (bool[] memory results) {
-        if (leaves.length != merkleProofs.length) revert ArrayMismatch();
-        if (leaves.length > MAX_BATCH_SIZE) revert BatchTooLarge();
+        require(leaves.length == merkleProofs.length, "Array mismatch");
+        require(leaves.length <= MAX_BATCH_SIZE, "Batch too large");
 
         VerificationRecord storage record = records[recordId];
-        if (record.recordId == bytes32(0)) revert RecordNotFound();
+        require(record.recordId != bytes32(0), "Record not found");
 
         results = new bool[](leaves.length);
         for (uint256 i = 0; i < leaves.length; i++) {
@@ -410,8 +386,8 @@ contract VerificationRegistry is AccessControl, ReentrancyGuard {
         external
         onlyRole(REGISTRY_ADMIN_ROLE)
     {
-        if (trustedVerifiers[verifier]) revert AlreadyRegistered();
-        if (initialReputation > 10000) revert InvalidReputation();
+        require(!trustedVerifiers[verifier], "Already registered");
+        require(initialReputation <= 10000, "Invalid reputation");
 
         trustedVerifiers[verifier] = true;
         verifierReputation[verifier] = initialReputation;
@@ -430,9 +406,9 @@ contract VerificationRegistry is AccessControl, ReentrancyGuard {
         string calldata comments
     ) external onlyRole(VERIFIER_ROLE) {
         VerificationRecord storage record = records[recordId];
-        if (record.recordId == bytes32(0)) revert RecordNotFound();
-        if (record.status != VerificationStatus.InProgress) revert InvalidStatus();
-        if (verifierSignatures[recordId][msg.sender].verifier != address(0)) revert AlreadySigned();
+        require(record.recordId != bytes32(0), "Record not found");
+        require(record.status == VerificationStatus.InProgress, "Invalid status");
+        require(verifierSignatures[recordId][msg.sender].verifier == address(0), "Already signed");
 
         // Create attestation hash
         bytes32 attestationHash = keccak256(abi.encodePacked(
@@ -446,7 +422,7 @@ contract VerificationRegistry is AccessControl, ReentrancyGuard {
         // Verify signature
         bytes32 ethSignedHash = attestationHash.toEthSignedMessageHash();
         address recovered = ethSignedHash.recover(signature);
-        if (recovered != msg.sender) revert InvalidSignature();
+        require(recovered == msg.sender, "Invalid signature");
 
         verifierSignatures[recordId][msg.sender] = VerifierSignature({
             verifier: msg.sender,
@@ -598,9 +574,9 @@ contract VerificationRegistry is AccessControl, ReentrancyGuard {
         bytes32[] calldata recordIds,
         bytes32[] calldata recordRoots
     ) external onlyRole(REGISTRY_ADMIN_ROLE) returns (bytes32) {
-        if (recordIds.length != recordRoots.length) revert ArrayMismatch();
-        if (recordIds.length > MAX_BATCH_SIZE) revert BatchTooLarge();
-        if (recordIds.length == 0) revert EmptyBatch();
+        require(recordIds.length == recordRoots.length, "Array mismatch");
+        require(recordIds.length <= MAX_BATCH_SIZE, "Batch too large");
+        require(recordIds.length > 0, "Empty batch");
 
         bytes32 batchId = keccak256(abi.encodePacked(
             recordIds,
@@ -633,8 +609,8 @@ contract VerificationRegistry is AccessControl, ReentrancyGuard {
      * @dev Finalize a batch (no more records can be added)
      */
     function finalizeBatch(bytes32 batchId) external onlyRole(REGISTRY_ADMIN_ROLE) {
-        if (batches[batchId].batchId == bytes32(0)) revert BatchNotFound();
-        if (batches[batchId].isFinalized) revert AlreadyFinalized();
+        require(batches[batchId].batchId != bytes32(0), "Batch not found");
+        require(!batches[batchId].isFinalized, "Already finalized");
 
         batches[batchId].isFinalized = true;
     }
@@ -643,7 +619,7 @@ contract VerificationRegistry is AccessControl, ReentrancyGuard {
      * @dev Compute Merkle root from leaves
      */
     function _computeMerkleRoot(bytes32[] memory leaves) internal pure returns (bytes32) {
-        if (leaves.length == 0) revert EmptyLeaves();
+        require(leaves.length > 0, "Empty leaves");
 
         uint256 n = leaves.length;
         while (n > 1) {
@@ -677,8 +653,8 @@ contract VerificationRegistry is AccessControl, ReentrancyGuard {
         bytes calldata proof,
         string calldata proofSystem
     ) external onlyRole(PROOF_SUBMITTER_ROLE) {
-        if (zkProofs[proofId].proofId != bytes32(0)) revert ProofExists();
-        if (records[recordId].recordId == bytes32(0)) revert RecordNotFound();
+        require(zkProofs[proofId].proofId == bytes32(0), "Proof exists");
+        require(records[recordId].recordId != bytes32(0), "Record not found");
 
         zkProofs[proofId] = ZKProofRecord({
             proofId: proofId,
@@ -714,7 +690,7 @@ contract VerificationRegistry is AccessControl, ReentrancyGuard {
         external
         onlyRole(VERIFIER_ROLE)
     {
-        if (zkProofs[proofId].proofId == bytes32(0)) revert ProofNotFound();
+        require(zkProofs[proofId].proofId != bytes32(0), "Proof not found");
 
         zkProofs[proofId].isVerified = isValid;
         proofs[proofId].isValid = isValid;
@@ -798,7 +774,7 @@ contract VerificationRegistry is AccessControl, ReentrancyGuard {
         )
     {
         bytes32 recordId = creditVerification[creditTokenId];
-        if (recordId == bytes32(0)) revert NoVerificationRecord();
+        require(recordId != bytes32(0), "No verification record");
 
         VerificationRecord storage record = records[recordId];
         return (
@@ -831,8 +807,8 @@ contract VerificationRegistry is AccessControl, ReentrancyGuard {
         onlyRole(REGISTRY_ADMIN_ROLE)
     {
         VerificationRecord storage record = records[recordId];
-        if (record.recordId == bytes32(0)) revert RecordNotFound();
-        if (record.status != VerificationStatus.Verified) revert NotVerified();
+        require(record.recordId != bytes32(0), "Record not found");
+        require(record.status == VerificationStatus.Verified, "Not verified");
 
         record.status = VerificationStatus.Revoked;
 
@@ -848,7 +824,7 @@ contract VerificationRegistry is AccessControl, ReentrancyGuard {
         external
         onlyRole(REGISTRY_ADMIN_ROLE)
     {
-        if (!trustedVerifiers[verifier]) revert NotAVerifier();
+        require(trustedVerifiers[verifier], "Not a verifier");
 
         int256 newRep = int256(verifierReputation[verifier]) + change;
         if (newRep < 0) newRep = 0;

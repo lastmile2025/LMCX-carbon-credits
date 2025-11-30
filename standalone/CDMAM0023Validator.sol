@@ -25,15 +25,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.
  *
  * Reference: UNFCCC CDM Methodology AM0023 Version 05.0
  *
- * @notice Security Considerations:
- * - block.timestamp is used for registration dates, status updates, and crediting
- *   period calculations. Miner manipulation (~15s) is negligible for these use cases
- *   spanning months or years.
- * - All input validation uses custom errors for gas efficiency.
- * - Some static analysis warnings about "infinite gas" are false positives - these
- *   functions use bounded storage operations that execute within block gas limits.
- * - Dynamic array loops in getMonitoringData and getAllEmissionReductions should be
- *   called with reasonable index ranges to avoid excessive gas consumption.
+ * @notice Uses custom errors for gas efficiency.
  */
 contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
     // ============ Custom Errors ============
@@ -414,7 +406,6 @@ contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
             pddHash: pddHash,
             totalCERsIssued: 0,
             complianceScore: 0,
-            // solhint-disable-next-line not-rely-on-time
             lastUpdated: block.timestamp
         });
 
@@ -441,7 +432,6 @@ contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
         pdd.registrationNumber = registrationNumber;
         pdd.validatingDOE = msg.sender;
         pdd.isRegistered = true;
-        // solhint-disable-next-line not-rely-on-time
         pdd.registrationDate = block.timestamp;
 
         _projectStatus[projectId].isRegistered = true;
@@ -689,7 +679,6 @@ contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
 
         status.complianceScore = score;
         status.isCompliant = score >= 7000;  // 70% threshold
-        // solhint-disable-next-line not-rely-on-time
         status.lastUpdated = block.timestamp;
 
         emit ComplianceUpdated(projectId, status.isCompliant, score);
@@ -834,7 +823,6 @@ contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
         returns (bool)
     {
         CDMStatus memory s = _projectStatus[projectId];
-        // solhint-disable-next-line not-rely-on-time
         uint256 currentYear = (block.timestamp / 365 days) + 1970;
         return currentYear >= s.creditingStartYear && currentYear <= s.creditingEndYear;
     }
@@ -848,7 +836,6 @@ contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
         returns (uint256)
     {
         CDMStatus memory s = _projectStatus[projectId];
-        // solhint-disable-next-line not-rely-on-time
         uint256 currentYear = (block.timestamp / 365 days) + 1970;
         if (currentYear >= s.creditingEndYear) return 0;
         return s.creditingEndYear - currentYear;
@@ -876,7 +863,6 @@ contract CDMAM0023Validator is AccessControl, ReentrancyGuard {
         status.creditingEndYear = creditingEndYear;
         status.cdmProjectNumber = cdmProjectNumber;
         status.pddHash = pddHash;
-        // solhint-disable-next-line not-rely-on-time
         status.lastUpdated = block.timestamp;
     }
 }

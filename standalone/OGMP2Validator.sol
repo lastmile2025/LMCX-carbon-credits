@@ -28,21 +28,6 @@ contract OGMP2Validator is AccessControl, ReentrancyGuard {
     bytes32 public constant REPORTER_ROLE = keccak256("REPORTER_ROLE");
     bytes32 public constant AUDITOR_ROLE = keccak256("AUDITOR_ROLE");
 
-    // ============ Custom Errors ============
-    error InvalidProjectId();
-    error AlreadyRegistered();
-    error ProjectNotRegistered();
-    error InvalidAssetId();
-    error InvalidShare();
-    error MustUpgradeLevel();
-    error AssetNotFound();
-    error InvalidYear();
-    error EmissionsRequired();
-    error BreakdownMismatch();
-    error ReportNotFound();
-    error AlreadyVerified();
-    error NoReportForYear();
-
     // ============ OGMP 2.0 Reporting Levels ============
     enum ReportingLevel {
         LEVEL_1,    // Company-wide emission factors
@@ -248,8 +233,8 @@ contract OGMP2Validator is AccessControl, ReentrancyGuard {
         uint256 targetReductionPercent,
         uint256 targetYear
     ) external onlyRole(VALIDATOR_ROLE) {
-        if (projectId == bytes32(0)) revert InvalidProjectId();
-        if (_projectStatus[projectId].isRegistered) revert AlreadyRegistered();
+        require(projectId != bytes32(0), "Invalid projectId");
+        require(!_projectStatus[projectId].isRegistered, "Already registered");
 
         _projectStatus[projectId] = OGMP2Status({
             projectId: projectId,
@@ -294,9 +279,9 @@ contract OGMP2Validator is AccessControl, ReentrancyGuard {
         bool isOperated,
         uint256 operatedShare
     ) external onlyRole(VALIDATOR_ROLE) {
-        if (!_projectStatus[projectId].isRegistered) revert ProjectNotRegistered();
-        if (assetId == bytes32(0)) revert InvalidAssetId();
-        if (operatedShare > 10000) revert InvalidShare();
+        require(_projectStatus[projectId].isRegistered, "Project not registered");
+        require(assetId != bytes32(0), "Invalid assetId");
+        require(operatedShare <= 10000, "Invalid share (max 100%)");
 
         _assets[projectId].push(AssetCompliance({
             assetId: assetId,
@@ -327,14 +312,14 @@ contract OGMP2Validator is AccessControl, ReentrancyGuard {
         for (uint256 i = 0; i < assets.length; i++) {
             if (assets[i].assetId == assetId && assets[i].isActive) {
                 ReportingLevel oldLevel = assets[i].currentLevel;
-                if (uint8(newLevel) <= uint8(oldLevel)) revert MustUpgradeLevel();
+                require(uint8(newLevel) > uint8(oldLevel), "Must upgrade level");
                 assets[i].currentLevel = newLevel;
                 emit LevelUpgraded(projectId, assetId, oldLevel, newLevel);
                 _updateProjectLevel(projectId);
                 return;
             }
         }
-        revert AssetNotFound();
+        revert("Asset not found");
     }
 
     // ============ Emission Reporting ============
@@ -352,9 +337,9 @@ contract OGMP2Validator is AccessControl, ReentrancyGuard {
         string calldata reportHash,
         SourceBreakdown calldata breakdown
     ) external onlyRole(REPORTER_ROLE) {
-        if (!_projectStatus[projectId].isRegistered) revert ProjectNotRegistered();
-        if (reportingYear < 2020 || reportingYear > 2100) revert InvalidYear();
-        if (totalMethaneEmissions == 0) revert EmissionsRequired();
+        require(_projectStatus[projectId].isRegistered, "Project not registered");
+        require(reportingYear >= 2020 && reportingYear <= 2100, "Invalid year");
+        require(totalMethaneEmissions > 0, "Emissions required");
 
         // Validate source breakdown matches total
         uint256 breakdownTotal = breakdown.fugitiveEmissions +
@@ -363,7 +348,7 @@ contract OGMP2Validator is AccessControl, ReentrancyGuard {
             breakdown.combustionEmissions +
             breakdown.processEmissions +
             breakdown.otherEmissions;
-        if (breakdownTotal != totalMethaneEmissions) revert BreakdownMismatch();
+        require(breakdownTotal == totalMethaneEmissions, "Breakdown mismatch");
 
         // Calculate CO2e using GWP-100
         uint256 co2eEmissions = totalMethaneEmissions * METHANE_GWP_100;
@@ -407,7 +392,7 @@ contract OGMP2Validator is AccessControl, ReentrancyGuard {
         uint256 year,
         uint256 methaneIntensity
     ) external onlyRole(REPORTER_ROLE) {
-        if (_reports[projectId][year].reportId == bytes32(0)) revert ReportNotFound();
+        require(_reports[projectId][year].reportId != bytes32(0), "Report not found");
         _reports[projectId][year].methaneIntensity = methaneIntensity;
     }
 
@@ -418,8 +403,8 @@ contract OGMP2Validator is AccessControl, ReentrancyGuard {
         bytes32 projectId,
         uint256 year
     ) external onlyRole(AUDITOR_ROLE) {
-        if (_reports[projectId][year].reportId == bytes32(0)) revert ReportNotFound();
-        if (_reports[projectId][year].isVerified) revert AlreadyVerified();
+        require(_reports[projectId][year].reportId != bytes32(0), "Report not found");
+        require(!_reports[projectId][year].isVerified, "Already verified");
 
         _reports[projectId][year].isVerified = true;
         _reports[projectId][year].verifiedBy = msg.sender;
@@ -442,8 +427,8 @@ contract OGMP2Validator is AccessControl, ReentrancyGuard {
         string calldata reconciliationNotes,
         string calldata evidenceHash
     ) external onlyRole(REPORTER_ROLE) {
-        if (!_projectStatus[projectId].isRegistered) revert ProjectNotRegistered();
-        if (_reports[projectId][reportingYear].reportId == bytes32(0)) revert NoReportForYear();
+        require(_projectStatus[projectId].isRegistered, "Project not registered");
+        require(_reports[projectId][reportingYear].reportId != bytes32(0), "No report for year");
 
         int256 difference = int256(topDownMeasurement) - int256(bottomUpEstimate);
         uint256 absDiff = difference >= 0 ? uint256(difference) : uint256(-difference);
@@ -492,7 +477,7 @@ contract OGMP2Validator is AccessControl, ReentrancyGuard {
         bool hasLevel5Target,
         bool reportsNonOperated
     ) external onlyRole(VALIDATOR_ROLE) {
-        if (!_projectStatus[projectId].isRegistered) revert ProjectNotRegistered();
+        require(_projectStatus[projectId].isRegistered, "Project not registered");
 
         GoldStandardCriteria storage g = _goldStandard[projectId];
         g.hasLevel4ByDeadline = hasLevel4ByDeadline;

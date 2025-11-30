@@ -25,31 +25,6 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
     bytes32 public constant GEOFENCE_ADMIN_ROLE = keccak256("GEOFENCE_ADMIN_ROLE");
     bytes32 public constant VINTAGE_ADMIN_ROLE = keccak256("VINTAGE_ADMIN_ROLE");
 
-    // ============ Custom Errors ============
-    error RecordExists();
-    error InvalidCreditId();
-    error InvalidVintageYear();
-    error RecordNotFound();
-    error CreditInactive();
-    error NotInMintedState();
-    error CannotTransfer();
-    error CreditIsLocked();
-    error CannotRetire();
-    error CannotInvalidateRetiredCredit();
-    error AlreadyLocked();
-    error CannotLock();
-    error NotLocked();
-    error InvalidReturnState();
-    error SourceJurisdictionNotActive();
-    error TargetJurisdictionNotActive();
-    error JurisdictionNotActive();
-    error InternationalTransferNotAllowed();
-    error IncompatibleJurisdiction();
-    error InvalidAgeProgression();
-    error DiscountExceedsMax();
-    error TokenNotTracked();
-    error RetirementNotFound();
-
     // ============ Constants ============
     uint256 public constant COOLING_OFF_PERIOD = 0;  // No cooling-off period - immediate transferability
     uint256 public constant MAX_VINTAGE_AGE = 10 * 365 days; // 10 years
@@ -295,10 +270,9 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         address minter,
         bytes32 jurisdictionCode
     ) external onlyRole(LIFECYCLE_MANAGER_ROLE) returns (bytes32) {
-        if (vintageRecords[creditId].creditId != bytes32(0)) revert RecordExists();
-        if (creditId == bytes32(0)) revert InvalidCreditId();
-        // solhint-disable-next-line not-rely-on-time
-        if (vintageYear < 2000 || vintageYear > block.timestamp / 365 days + 1970 + 1) revert InvalidVintageYear();
+        require(vintageRecords[creditId].creditId == bytes32(0), "Record exists");
+        require(creditId != bytes32(0), "Invalid creditId");
+        require(vintageYear >= 2000 && vintageYear <= block.timestamp / 365 days + 1970 + 1, "Invalid vintage year");
 
         // Calculate initial vintage grade and discount
         (VintageGrade grade, uint256 discount) = calculateVintageGrade(vintageYear);
@@ -369,8 +343,8 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
      */
     function updateVintageGrade(bytes32 creditId) external {
         VintageRecord storage record = vintageRecords[creditId];
-        if (record.creditId == bytes32(0)) revert RecordNotFound();
-        if (record.state == LifecycleState.Retired || record.state == LifecycleState.Invalidated) revert CreditInactive();
+        require(record.creditId != bytes32(0), "Record not found");
+        require(record.state != LifecycleState.Retired && record.state != LifecycleState.Invalidated, "Credit inactive");
 
         (VintageGrade newGrade, uint256 newDiscount) = calculateVintageGrade(record.vintageYear);
 
@@ -398,8 +372,8 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
      */
     function activateCredit(bytes32 creditId) external {
         VintageRecord storage record = vintageRecords[creditId];
-        if (record.creditId == bytes32(0)) revert RecordNotFound();
-        if (record.state != LifecycleState.Minted) revert NotInMintedState();
+        require(record.creditId != bytes32(0), "Record not found");
+        require(record.state == LifecycleState.Minted, "Not in Minted state");
         // No cooling-off period check - credits are immediately transferable
 
         _transitionState(creditId, LifecycleState.Active, "activate");
@@ -416,12 +390,15 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         bytes32 transactionHash
     ) external onlyRole(LIFECYCLE_MANAGER_ROLE) {
         VintageRecord storage record = vintageRecords[creditId];
-        if (record.creditId == bytes32(0)) revert RecordNotFound();
+        require(record.creditId != bytes32(0), "Record not found");
         // Allow transfer from Minted state as well since no cooling-off period
-        if (record.state != LifecycleState.Minted &&
-            record.state != LifecycleState.Active &&
-            record.state != LifecycleState.Transferred) revert CannotTransfer();
-        if (locks[creditId].isActive) revert CreditIsLocked();
+        require(
+            record.state == LifecycleState.Minted ||
+            record.state == LifecycleState.Active ||
+            record.state == LifecycleState.Transferred,
+            "Cannot transfer"
+        );
+        require(!locks[creditId].isActive, "Credit is locked");
 
         // No cooling-off period check - credits are immediately transferable
 
@@ -467,9 +444,12 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         string calldata certificateHash
     ) external onlyRole(LIFECYCLE_MANAGER_ROLE) returns (bytes32) {
         VintageRecord storage record = vintageRecords[creditId];
-        if (record.creditId == bytes32(0)) revert RecordNotFound();
-        if (record.state != LifecycleState.Active && record.state != LifecycleState.Transferred) revert CannotRetire();
-        if (locks[creditId].isActive) revert CreditIsLocked();
+        require(record.creditId != bytes32(0), "Record not found");
+        require(
+            record.state == LifecycleState.Active || record.state == LifecycleState.Transferred,
+            "Cannot retire"
+        );
+        require(!locks[creditId].isActive, "Credit is locked");
 
         bytes32 retirementId = keccak256(abi.encodePacked(
             creditId,
@@ -521,8 +501,8 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         onlyRole(LIFECYCLE_MANAGER_ROLE)
     {
         VintageRecord storage record = vintageRecords[creditId];
-        if (record.creditId == bytes32(0)) revert RecordNotFound();
-        if (record.state == LifecycleState.Retired) revert CannotInvalidateRetiredCredit();
+        require(record.creditId != bytes32(0), "Record not found");
+        require(record.state != LifecycleState.Retired, "Cannot invalidate retired credit");
 
         LifecycleState previousState = record.state;
         _transitionState(creditId, LifecycleState.Invalidated, "invalidate");
@@ -566,9 +546,9 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         onlyRole(LIFECYCLE_MANAGER_ROLE)
     {
         VintageRecord storage record = vintageRecords[creditId];
-        if (record.creditId == bytes32(0)) revert RecordNotFound();
-        if (locks[creditId].isActive) revert AlreadyLocked();
-        if (record.state == LifecycleState.Retired || record.state == LifecycleState.Invalidated) revert CannotLock();
+        require(record.creditId != bytes32(0), "Record not found");
+        require(!locks[creditId].isActive, "Already locked");
+        require(record.state != LifecycleState.Retired && record.state != LifecycleState.Invalidated, "Cannot lock");
 
         locks[creditId] = LockRecord({
             creditId: creditId,
@@ -602,10 +582,13 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         external
         onlyRole(LIFECYCLE_MANAGER_ROLE)
     {
-        if (!locks[creditId].isActive) revert NotLocked();
-        if (returnState != LifecycleState.Active &&
-            returnState != LifecycleState.Transferred &&
-            returnState != LifecycleState.Minted) revert InvalidReturnState();
+        require(locks[creditId].isActive, "Not locked");
+        require(
+            returnState == LifecycleState.Active ||
+            returnState == LifecycleState.Transferred ||
+            returnState == LifecycleState.Minted,
+            "Invalid return state"
+        );
 
         VintageRecord storage record = vintageRecords[creditId];
         locks[creditId].isActive = false;
@@ -715,8 +698,8 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         external
         onlyRole(GEOFENCE_ADMIN_ROLE)
     {
-        if (!geofences[fromJurisdiction].isActive) revert SourceJurisdictionNotActive();
-        if (!geofences[toJurisdiction].isActive) revert TargetJurisdictionNotActive();
+        require(geofences[fromJurisdiction].isActive, "Source jurisdiction not active");
+        require(geofences[toJurisdiction].isActive, "Target jurisdiction not active");
 
         geofences[fromJurisdiction].compatibleJurisdictions.push(toJurisdiction);
     }
@@ -728,7 +711,7 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         external
         onlyRole(GEOFENCE_ADMIN_ROLE)
     {
-        if (!geofences[jurisdictionCode].isActive) revert JurisdictionNotActive();
+        require(geofences[jurisdictionCode].isActive, "Jurisdiction not active");
         userJurisdiction[user] = jurisdictionCode;
     }
 
@@ -748,7 +731,7 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
 
         // Check if international transfer
         if (toJurisdiction != creditJurisdiction) {
-            if (!geofence.allowsInternationalTransfer) revert InternationalTransferNotAllowed();
+            require(geofence.allowsInternationalTransfer, "International transfer not allowed");
 
             // Check if target jurisdiction is compatible
             bool isCompatible = false;
@@ -758,7 +741,7 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
                     break;
                 }
             }
-            if (!isCompatible) revert IncompatibleJurisdiction();
+            require(isCompatible, "Incompatible jurisdiction");
         }
     }
 
@@ -778,10 +761,10 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         uint256 legacyDiscount,
         uint256 archiveDiscount
     ) external onlyRole(VINTAGE_ADMIN_ROLE) {
-        if (premiumMaxAge >= standardMaxAge) revert InvalidAgeProgression();
-        if (standardMaxAge >= discountMaxAge) revert InvalidAgeProgression();
-        if (discountMaxAge >= legacyMaxAge) revert InvalidAgeProgression();
-        if (archiveDiscount > PRECISION) revert DiscountExceedsMax();
+        require(premiumMaxAge < standardMaxAge, "Invalid age progression");
+        require(standardMaxAge < discountMaxAge, "Invalid age progression");
+        require(discountMaxAge < legacyMaxAge, "Invalid age progression");
+        require(archiveDiscount <= PRECISION, "Discount exceeds 100%");
 
         discountSchedule = DiscountSchedule({
             premiumMaxAge: premiumMaxAge,
@@ -826,7 +809,7 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         returns (VintageRecord memory)
     {
         bytes32 creditId = tokenToCreditId[tokenId];
-        if (creditId == bytes32(0)) revert TokenNotTracked();
+        require(creditId != bytes32(0), "Token not tracked");
         return vintageRecords[creditId];
     }
 
@@ -878,7 +861,7 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         returns (uint256)
     {
         VintageRecord storage record = vintageRecords[creditId];
-        if (record.creditId == bytes32(0)) revert RecordNotFound();
+        require(record.creditId != bytes32(0), "Record not found");
 
         uint256 discount = record.discountFactor;
         return baseValue * (PRECISION - discount) / PRECISION;
@@ -935,7 +918,7 @@ contract VintageTracker is AccessControl, ReentrancyGuard, Pausable {
         external
         onlyRole(LIFECYCLE_MANAGER_ROLE)
     {
-        if (retirements[retirementId].retirementId == bytes32(0)) revert RetirementNotFound();
+        require(retirements[retirementId].retirementId != bytes32(0), "Retirement not found");
         retirements[retirementId].isVerified = true;
     }
 

@@ -28,15 +28,6 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.
  * Reference: 40 CFR Part 98, Subpart W
  */
 contract EPASubpartWValidator is AccessControl, ReentrancyGuard {
-    // ============ Custom Errors ============
-    error InvalidProjectId();
-    error AlreadyRegistered();
-    error ProjectNotRegistered();
-    error InvalidFacilityId();
-    error GHGRPIdRequired();
-    error InvalidYear();
-    error NoReport();
-
     bytes32 public constant VALIDATOR_ROLE = keccak256("VALIDATOR_ROLE");
     bytes32 public constant REPORTER_ROLE = keccak256("REPORTER_ROLE");
     bytes32 public constant AUDITOR_ROLE = keccak256("AUDITOR_ROLE");
@@ -285,8 +276,8 @@ contract EPASubpartWValidator is AccessControl, ReentrancyGuard {
      * @dev Register a project for Subpart W compliance
      */
     function registerProject(bytes32 projectId) external onlyRole(VALIDATOR_ROLE) {
-        if (projectId == bytes32(0)) revert InvalidProjectId();
-        if (_projectStatus[projectId].isRegistered) revert AlreadyRegistered();
+        require(projectId != bytes32(0), "Invalid projectId");
+        require(!_projectStatus[projectId].isRegistered, "Already registered");
 
         _projectStatus[projectId] = SubpartWStatus({
             projectId: projectId,
@@ -322,9 +313,9 @@ contract EPASubpartWValidator is AccessControl, ReentrancyGuard {
         string calldata county,
         string calldata basin
     ) external onlyRole(VALIDATOR_ROLE) {
-        if (!_projectStatus[projectId].isRegistered) revert ProjectNotRegistered();
-        if (facilityId == bytes32(0)) revert InvalidFacilityId();
-        if (bytes(ghgrpId).length == 0) revert GHGRPIdRequired();
+        require(_projectStatus[projectId].isRegistered, "Project not registered");
+        require(facilityId != bytes32(0), "Invalid facilityId");
+        require(bytes(ghgrpId).length > 0, "GHGRP ID required");
 
         _facilities[projectId].push(FacilityInfo({
             facilityId: facilityId,
@@ -387,8 +378,8 @@ contract EPASubpartWValidator is AccessControl, ReentrancyGuard {
         uint256 totalN2O,
         string calldata reportHash
     ) external onlyRole(REPORTER_ROLE) {
-        if (!_projectStatus[projectId].isRegistered) revert ProjectNotRegistered();
-        if (reportingYear < 2010 || reportingYear > 2100) revert InvalidYear();
+        require(_projectStatus[projectId].isRegistered, "Project not registered");
+        require(reportingYear >= 2010 && reportingYear <= 2100, "Invalid year");
 
         // Calculate CO2e
         uint256 totalCO2e = totalCO2 + (totalCH4 * GWP_CH4) + (totalN2O * GWP_N2O);
@@ -428,7 +419,7 @@ contract EPASubpartWValidator is AccessControl, ReentrancyGuard {
         CalculationMethod method,
         string calldata calculationDetails
     ) external onlyRole(REPORTER_ROLE) {
-        if (_reports[projectId][reportingYear].reportId == bytes32(0)) revert NoReport();
+        require(_reports[projectId][reportingYear].reportId != bytes32(0), "No report");
 
         _sourceEmissions[projectId][reportingYear].push(SourceEmissions({
             category: category,
@@ -449,7 +440,7 @@ contract EPASubpartWValidator is AccessControl, ReentrancyGuard {
         uint256 reportingYear,
         string calldata ghgrpSubmissionId
     ) external onlyRole(AUDITOR_ROLE) {
-        if (_reports[projectId][reportingYear].reportId == bytes32(0)) revert NoReport();
+        require(_reports[projectId][reportingYear].reportId != bytes32(0), "No report");
 
         _reports[projectId][reportingYear].isAccepted = true;
         _reports[projectId][reportingYear].ghgrpSubmissionId = ghgrpSubmissionId;
@@ -463,7 +454,7 @@ contract EPASubpartWValidator is AccessControl, ReentrancyGuard {
      * @dev Verify report (third-party verification)
      */
     function verifyReport(bytes32 projectId, uint256 year) external onlyRole(AUDITOR_ROLE) {
-        if (_reports[projectId][year].reportId == bytes32(0)) revert NoReport();
+        require(_reports[projectId][year].reportId != bytes32(0), "No report");
         _reports[projectId][year].isVerified = true;
         emit ReportVerified(projectId, year, msg.sender);
         _updateComplianceScore(projectId);
@@ -487,19 +478,19 @@ contract EPASubpartWValidator is AccessControl, ReentrancyGuard {
         string calldata surveyMethodology,
         string calldata evidenceHash
     ) external onlyRole(REPORTER_ROLE) {
-        // Write directly to storage to reduce stack depth
-        LDARCompliance storage compliance = _ldarCompliance[facilityId][reportingYear];
-        compliance.facilityId = facilityId;
-        compliance.reportingYear = reportingYear;
-        compliance.hasLDARProgram = hasLDARProgram;
-        compliance.surveyFrequencyDays = surveyFrequencyDays;
-        compliance.lastSurveyDate = lastSurveyDate;
-        compliance.leaksDetected = leaksDetected;
-        compliance.leaksRepaired = leaksRepaired;
-        compliance.leaksAwaitingRepair = leaksAwaitingRepair;
-        compliance.averageRepairDays = averageRepairDays;
-        compliance.surveyMethodology = surveyMethodology;
-        compliance.evidenceHash = evidenceHash;
+        _ldarCompliance[facilityId][reportingYear] = LDARCompliance({
+            facilityId: facilityId,
+            reportingYear: reportingYear,
+            hasLDARProgram: hasLDARProgram,
+            surveyFrequencyDays: surveyFrequencyDays,
+            lastSurveyDate: lastSurveyDate,
+            leaksDetected: leaksDetected,
+            leaksRepaired: leaksRepaired,
+            leaksAwaitingRepair: leaksAwaitingRepair,
+            averageRepairDays: averageRepairDays,
+            surveyMethodology: surveyMethodology,
+            evidenceHash: evidenceHash
+        });
 
         emit LDARComplianceUpdated(facilityId, reportingYear, leaksDetected, leaksRepaired);
     }
@@ -511,7 +502,7 @@ contract EPASubpartWValidator is AccessControl, ReentrancyGuard {
         external
         onlyRole(VALIDATOR_ROLE)
     {
-        if (!_projectStatus[projectId].isRegistered) revert ProjectNotRegistered();
+        require(_projectStatus[projectId].isRegistered, "Not registered");
         _projectStatus[projectId].hasLDARProgram = hasProgram;
         _updateComplianceScore(projectId);
     }
@@ -711,7 +702,7 @@ contract EPASubpartWValidator is AccessControl, ReentrancyGuard {
         string calldata ghgrpReportId,
         string calldata evidenceHash
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (!_projectStatus[projectId].isRegistered) revert ProjectNotRegistered();
+        require(_projectStatus[projectId].isRegistered, "Not registered");
 
         SubpartWStatus storage status = _projectStatus[projectId];
         status.isCompliant = isCompliant;

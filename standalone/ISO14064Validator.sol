@@ -27,32 +27,6 @@ contract ISO14064Validator is AccessControl, ReentrancyGuard {
     bytes32 public constant VERIFIER_ROLE = keccak256("VERIFIER_ROLE");
     bytes32 public constant AUDITOR_ROLE = keccak256("AUDITOR_ROLE");
 
-    // ============ Custom Errors ============
-    error InvalidVerifierAddress();
-    error AccreditationIdRequired();
-    error InvalidProjectId();
-    error ProjectExists();
-    error ProjectNotRegistered();
-    error BaselineEmissionsRequired();
-    error InvalidDateRange();
-    error MethodologyRequired();
-    error InvalidReductionCalculation();
-    error UncertaintyTooHigh();
-    error ParametersRequired();
-    error InvalidFrequency();
-    error NoMonitoringPlan();
-    error NotAccreditedVerifier();
-    error MaterialFindingsNotAllowed();
-    error InvalidValidity();
-    error BaselineNotApproved();
-    error AdditionalityNotPassed();
-    error NotQuantified();
-    error NoMonitoringPlanForVerification();
-    error LeakageNotAssessed();
-    error NotValidVerification();
-    error MaxPercentageExceeded();
-    error AtLeastOneThresholdRequired();
-
     // ============ ISO 14064-2 Project Categories ============
     enum ProjectCategory {
         AGRICULTURE,                    // Agricultural practices
@@ -293,8 +267,8 @@ contract ISO14064Validator is AccessControl, ReentrancyGuard {
         address verifier,
         string calldata accreditationId
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (verifier == address(0)) revert InvalidVerifierAddress();
-        if (bytes(accreditationId).length == 0) revert AccreditationIdRequired();
+        require(verifier != address(0), "Invalid verifier address");
+        require(bytes(accreditationId).length > 0, "Accreditation ID required");
 
         accreditedVerifiers[verifier] = true;
         verifierAccreditationIds[verifier] = accreditationId;
@@ -323,8 +297,8 @@ contract ISO14064Validator is AccessControl, ReentrancyGuard {
         bytes32 projectId,
         ProjectCategory category
     ) external onlyRole(VALIDATOR_ROLE) {
-        if (projectId == bytes32(0)) revert InvalidProjectId();
-        if (_projectStatus[projectId].isFullyCompliant) revert ProjectExists();
+        require(projectId != bytes32(0), "Invalid projectId");
+        require(!_projectStatus[projectId].isFullyCompliant, "Project exists");
 
         _projectStatus[projectId] = ISO14064Status({
             projectId: projectId,
@@ -360,10 +334,10 @@ contract ISO14064Validator is AccessControl, ReentrancyGuard {
         string calldata methodologyReference,
         string calldata dataSourcesHash
     ) external onlyRole(VALIDATOR_ROLE) {
-        if (_projectStatus[projectId].projectId == bytes32(0)) revert ProjectNotRegistered();
-        if (baselineEmissions == 0) revert BaselineEmissionsRequired();
-        if (baselineEndDate <= baselineStartDate) revert InvalidDateRange();
-        if (bytes(methodologyReference).length == 0) revert MethodologyRequired();
+        require(_projectStatus[projectId].projectId != bytes32(0), "Project not registered");
+        require(baselineEmissions > 0, "Baseline emissions required");
+        require(baselineEndDate > baselineStartDate, "Invalid date range");
+        require(bytes(methodologyReference).length > 0, "Methodology required");
 
         _baselines[projectId] = BaselineScenario({
             scenarioId: scenarioId,
@@ -397,7 +371,7 @@ contract ISO14064Validator is AccessControl, ReentrancyGuard {
         bool commonPractice,
         string calldata evidenceHash
     ) external onlyRole(VALIDATOR_ROLE) {
-        if (_projectStatus[projectId].projectId == bytes32(0)) revert ProjectNotRegistered();
+        require(_projectStatus[projectId].projectId != bytes32(0), "Project not registered");
 
         // Additionality requires at least regulatory surplus + one other test
         bool passed = regulatorySurplus && (investmentAnalysis || barrierAnalysis || commonPractice);
@@ -441,9 +415,9 @@ contract ISO14064Validator is AccessControl, ReentrancyGuard {
         uint256 uncertaintyPercent,
         string calldata calculationMethodHash
     ) external onlyRole(VALIDATOR_ROLE) {
-        if (_projectStatus[projectId].projectId == bytes32(0)) revert ProjectNotRegistered();
-        if (grossReductions < projectEmissions + leakageEmissions) revert InvalidReductionCalculation();
-        if (uncertaintyPercent > 5000) revert UncertaintyTooHigh();
+        require(_projectStatus[projectId].projectId != bytes32(0), "Project not registered");
+        require(grossReductions >= projectEmissions + leakageEmissions, "Invalid reduction calc");
+        require(uncertaintyPercent <= 5000, "Uncertainty too high (>50%)");
 
         uint256 netReductions = grossReductions - projectEmissions - leakageEmissions;
 
@@ -478,7 +452,7 @@ contract ISO14064Validator is AccessControl, ReentrancyGuard {
         bool isMitigated,
         string calldata mitigationMeasures
     ) external onlyRole(VALIDATOR_ROLE) {
-        if (_projectStatus[projectId].projectId == bytes32(0)) revert ProjectNotRegistered();
+        require(_projectStatus[projectId].projectId != bytes32(0), "Project not registered");
 
         _leakage[projectId] = LeakageAssessment({
             hasUpstreamLeakage: hasUpstreamLeakage,
@@ -509,9 +483,9 @@ contract ISO14064Validator is AccessControl, ReentrancyGuard {
         string calldata qaqcProceduresHash,
         string calldata dataManagementHash
     ) external onlyRole(VALIDATOR_ROLE) {
-        if (_projectStatus[projectId].projectId == bytes32(0)) revert ProjectNotRegistered();
-        if (monitoringParameters.length == 0) revert ParametersRequired();
-        if (monitoringFrequencyDays == 0 || monitoringFrequencyDays > 365) revert InvalidFrequency();
+        require(_projectStatus[projectId].projectId != bytes32(0), "Project not registered");
+        require(monitoringParameters.length > 0, "Parameters required");
+        require(monitoringFrequencyDays > 0 && monitoringFrequencyDays <= 365, "Invalid frequency");
 
         _monitoring[projectId] = MonitoringPlan({
             planId: planId,
@@ -534,7 +508,7 @@ contract ISO14064Validator is AccessControl, ReentrancyGuard {
      * @dev Update monitoring timestamp
      */
     function recordMonitoringEvent(bytes32 projectId) external onlyRole(VALIDATOR_ROLE) {
-        if (!_monitoring[projectId].isImplemented) revert NoMonitoringPlan();
+        require(_monitoring[projectId].isImplemented, "No monitoring plan");
 
         _monitoring[projectId].lastMonitoringDate = block.timestamp;
         _monitoring[projectId].nextMonitoringDue =
@@ -557,18 +531,18 @@ contract ISO14064Validator is AccessControl, ReentrancyGuard {
         string calldata findingsHash,
         bool hasMaterialFindings
     ) external onlyRole(VERIFIER_ROLE) {
-        if (_projectStatus[projectId].projectId == bytes32(0)) revert ProjectNotRegistered();
-        if (!accreditedVerifiers[msg.sender]) revert NotAccreditedVerifier();
-        if (hasMaterialFindings) revert MaterialFindingsNotAllowed();
-        if (validityDays == 0 || validityDays > 1095) revert InvalidValidity();
+        require(_projectStatus[projectId].projectId != bytes32(0), "Project not registered");
+        require(accreditedVerifiers[msg.sender], "Not accredited verifier");
+        require(!hasMaterialFindings, "Cannot verify with material findings");
+        require(validityDays > 0 && validityDays <= 1095, "Invalid validity (max 3 years)");
 
         // All ISO 14064-2 components must be complete before verification
         ISO14064Status storage status = _projectStatus[projectId];
-        if (!status.hasApprovedBaseline) revert BaselineNotApproved();
-        if (!status.passedAdditionality) revert AdditionalityNotPassed();
-        if (!status.isQuantified) revert NotQuantified();
-        if (!status.hasMonitoringPlan) revert NoMonitoringPlanForVerification();
-        if (!status.leakageAssessed) revert LeakageNotAssessed();
+        require(status.hasApprovedBaseline, "Baseline not approved");
+        require(status.passedAdditionality, "Additionality not passed");
+        require(status.isQuantified, "Not quantified");
+        require(status.hasMonitoringPlan, "No monitoring plan");
+        require(status.leakageAssessed, "Leakage not assessed");
 
         _verifications[verificationId] = VerificationRecord({
             verificationId: verificationId,
@@ -604,7 +578,7 @@ contract ISO14064Validator is AccessControl, ReentrancyGuard {
         bytes32 verificationId,
         string calldata reason
     ) external onlyRole(AUDITOR_ROLE) {
-        if (!_verifications[verificationId].isValid) revert NotValidVerification();
+        require(_verifications[verificationId].isValid, "Not valid verification");
 
         _verifications[verificationId].isValid = false;
 
@@ -823,8 +797,8 @@ contract ISO14064Validator is AccessControl, ReentrancyGuard {
         bool usePercentage,
         bool useAbsolute
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (percentageThreshold > 1000) revert MaxPercentageExceeded();
-        if (!usePercentage && !useAbsolute) revert AtLeastOneThresholdRequired();
+        require(percentageThreshold <= 1000, "Max 10%");
+        require(usePercentage || useAbsolute, "At least one threshold required");
 
         materialityThreshold = MaterialityThreshold({
             percentageThreshold: percentageThreshold,

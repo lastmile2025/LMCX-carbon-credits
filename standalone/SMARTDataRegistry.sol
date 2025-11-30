@@ -25,25 +25,6 @@ contract SMARTDataRegistry is AccessControl {
     bytes32 public constant VERIFIER_ROLE = keccak256("VERIFIER_ROLE");
     bytes32 public constant AGGREGATOR_ROLE = keccak256("AGGREGATOR_ROLE");
 
-    // ============ Custom Errors ============
-    error InvalidProjectId();
-    error InvalidLatitude();
-    error InvalidLongitude();
-    error CountryRequired();
-    error InvalidDataId();
-    error InvalidTimeRange();
-    error PeriodTypeRequired();
-    error VerificationHashRequired();
-    error ConflictDeclarationRequired();
-    error JustificationRequired();
-    error DataMustBeDifferent();
-    error CannotSelfApprove();
-    error RestatementNotFound();
-    error InvalidAggregationId();
-    error KeysValuesMismatch();
-    error InvalidCustodian();
-    error ExpirationMustBeFuture();
-
     // ============ SMART Protocol Data Structures ============
 
     /// @notice Physical location governance (Requirement 1)
@@ -199,10 +180,10 @@ contract SMARTDataRegistry is AccessControl {
         string calldata region,
         string calldata siteIdentifier
     ) external onlyRole(DATA_CUSTODIAN_ROLE) {
-        if (projectId == bytes32(0)) revert InvalidProjectId();
-        if (latitude < -90000000 || latitude > 90000000) revert InvalidLatitude();
-        if (longitude < -180000000 || longitude > 180000000) revert InvalidLongitude();
-        if (bytes(country).length == 0) revert CountryRequired();
+        require(projectId != bytes32(0), "Invalid projectId");
+        require(latitude >= -90000000 && latitude <= 90000000, "Invalid latitude");
+        require(longitude >= -180000000 && longitude <= 180000000, "Invalid longitude");
+        require(bytes(country).length > 0, "Country required");
 
         projectLocations[projectId] = GeoLocation({
             latitude: latitude,
@@ -234,9 +215,9 @@ contract SMARTDataRegistry is AccessControl {
         uint256 endTimestamp,
         string calldata periodType
     ) external onlyRole(DATA_CUSTODIAN_ROLE) {
-        if (dataId == bytes32(0)) revert InvalidDataId();
-        if (endTimestamp < startTimestamp) revert InvalidTimeRange();
-        if (bytes(periodType).length == 0) revert PeriodTypeRequired();
+        require(dataId != bytes32(0), "Invalid dataId");
+        require(endTimestamp >= startTimestamp, "Invalid time range");
+        require(bytes(periodType).length > 0, "Period type required");
 
         temporalBindings[dataId] = TemporalPeriod({
             startTimestamp: startTimestamp,
@@ -278,14 +259,14 @@ contract SMARTDataRegistry is AccessControl {
         string calldata verificationHash,
         string calldata conflictDeclaration
     ) external onlyRole(VERIFIER_ROLE) {
-        if (dataId == bytes32(0)) revert InvalidDataId();
-        if (bytes(verificationHash).length == 0) revert VerificationHashRequired();
+        require(dataId != bytes32(0), "Invalid dataId");
+        require(bytes(verificationHash).length > 0, "Verification hash required");
 
         bool hasConflict = conflictRegistry[verifierOrgId][projectOrgId];
-
+        
         // If there's a conflict, a declaration must be provided
         if (hasConflict) {
-            if (bytes(conflictDeclaration).length == 0) revert ConflictDeclarationRequired();
+            require(bytes(conflictDeclaration).length > 0, "Conflict declaration required");
         }
 
         verifications[dataId].push(VerificationRecord({
@@ -332,7 +313,7 @@ contract SMARTDataRegistry is AccessControl {
         bytes32 eventDataHash,
         string calldata description
     ) external onlyRole(DATA_CUSTODIAN_ROLE) returns (uint256 eventId) {
-        if (projectId == bytes32(0)) revert InvalidProjectId();
+        require(projectId != bytes32(0), "Invalid projectId");
 
         eventId = eventSequenceNumber[projectId];
         
@@ -392,9 +373,9 @@ contract SMARTDataRegistry is AccessControl {
         bytes32 correctedDataHash,
         string calldata justification
     ) external onlyRole(DATA_CUSTODIAN_ROLE) returns (uint256 restatementId) {
-        if (dataId == bytes32(0)) revert InvalidDataId();
-        if (bytes(justification).length == 0) revert JustificationRequired();
-        if (originalDataHash == correctedDataHash) revert DataMustBeDifferent();
+        require(dataId != bytes32(0), "Invalid dataId");
+        require(bytes(justification).length > 0, "Justification required");
+        require(originalDataHash != correctedDataHash, "Data must be different");
 
         restatementId = nextRestatementId;
         nextRestatementId++;
@@ -422,12 +403,12 @@ contract SMARTDataRegistry is AccessControl {
         Restatement[] storage dataRestatements = restatements[dataId];
         for (uint256 i = 0; i < dataRestatements.length; i++) {
             if (dataRestatements[i].restatementId == restatementId) {
-                if (dataRestatements[i].authorizedBy == msg.sender) revert CannotSelfApprove();
+                require(dataRestatements[i].authorizedBy != msg.sender, "Cannot self-approve");
                 dataRestatements[i].isApproved = true;
                 return;
             }
         }
-        revert RestatementNotFound();
+        revert("Restatement not found");
     }
 
     // ============ Requirement 6: Aggregation Processes ============
@@ -442,8 +423,8 @@ contract SMARTDataRegistry is AccessControl {
         string[] calldata constantKeys,
         string[] calldata constantValues
     ) external onlyRole(AGGREGATOR_ROLE) {
-        if (aggregationId == bytes32(0)) revert InvalidAggregationId();
-        if (constantKeys.length != constantValues.length) revert KeysValuesMismatch();
+        require(aggregationId != bytes32(0), "Invalid aggregationId");
+        require(constantKeys.length == constantValues.length, "Keys/values mismatch");
 
         aggregationIds[aggregationId] = aggregationId;
         aggregationMethodology[aggregationId] = methodology;
@@ -483,10 +464,9 @@ contract SMARTDataRegistry is AccessControl {
         uint256 expirationDate,
         string calldata agreementHash
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (projectId == bytes32(0)) revert InvalidProjectId();
-        if (custodian == address(0)) revert InvalidCustodian();
-        // solhint-disable-next-line not-rely-on-time
-        if (expirationDate <= block.timestamp) revert ExpirationMustBeFuture();
+        require(projectId != bytes32(0), "Invalid projectId");
+        require(custodian != address(0), "Invalid custodian");
+        require(expirationDate > block.timestamp, "Expiration must be future");
 
         dataCustody[projectId] = DataCustody({
             custodian: custodian,
@@ -526,7 +506,7 @@ contract SMARTDataRegistry is AccessControl {
         bytes32 sourceHash,
         string calldata transformationType
     ) external onlyRole(DATA_CUSTODIAN_ROLE) {
-        if (dataId == bytes32(0)) revert InvalidDataId();
+        require(dataId != bytes32(0), "Invalid dataId");
 
         bool isRoot = (parentDataId == bytes32(0));
 

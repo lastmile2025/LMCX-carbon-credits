@@ -33,31 +33,6 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
     bytes32 public constant CLAIMS_ADJUSTER_ROLE = keccak256("CLAIMS_ADJUSTER_ROLE");
     bytes32 public constant UNDERWRITER_ROLE = keccak256("UNDERWRITER_ROLE");
 
-    // ============ Custom Errors ============
-    error InvalidProviderId();
-    error ProviderExists();
-    error InvalidPayoutAddress();
-    error ProviderNotActive();
-    error InsufficientCapital();
-    error TransferFailed();
-    error InvalidDuration();
-    error InsufficientCredits();
-    error InsufficientPremium();
-    error InsufficientProviderCapital();
-    error RefundFailed();
-    error NotPolicyHolder();
-    error PolicyNotActive();
-    error HasClaims();
-    error InsufficientReserveForRefund();
-    error ExceedsCoverage();
-    error EvidenceRequired();
-    error InvalidClaimStatus();
-    error ExceedsClaimAmount();
-    error ClaimNotApproved();
-    error InsufficientReserve();
-    error PaymentFailed();
-    error InvalidScore();
-
     // ============ Data Structures ============
 
     /// @notice Insurance provider registration
@@ -300,9 +275,9 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
         address payoutAddress,
         string calldata licenseHash
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (providerId == bytes32(0)) revert InvalidProviderId();
-        if (providers[providerId].isActive) revert ProviderExists();
-        if (payoutAddress == address(0)) revert InvalidPayoutAddress();
+        require(providerId != bytes32(0), "Invalid providerId");
+        require(!providers[providerId].isActive, "Provider exists");
+        require(payoutAddress != address(0), "Invalid payout address");
 
         providers[providerId] = InsuranceProvider({
             providerId: providerId,
@@ -325,7 +300,7 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
      * @dev Add capital to provider reserve
      */
     function addProviderCapital(bytes32 providerId) external payable onlyRole(INSURER_ROLE) {
-        if (!providers[providerId].isActive) revert ProviderNotActive();
+        require(providers[providerId].isActive, "Provider not active");
         
         providers[providerId].capitalReserve += msg.value;
 
@@ -340,13 +315,13 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
         uint256 amount
     ) external onlyRole(INSURER_ROLE) nonReentrant {
         InsuranceProvider storage provider = providers[providerId];
-        if (!provider.isActive) revert ProviderNotActive();
-        if (provider.capitalReserve < amount) revert InsufficientCapital();
+        require(provider.isActive, "Provider not active");
+        require(provider.capitalReserve >= amount, "Insufficient capital");
 
         provider.capitalReserve -= amount;
-
+        
         (bool success, ) = provider.payoutAddress.call{value: amount}("");
-        if (!success) revert TransferFailed();
+        require(success, "Transfer failed");
 
         emit ProviderCapitalUpdated(providerId, provider.capitalReserve);
     }
@@ -415,12 +390,14 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
         string calldata termsHash
     ) external payable nonReentrant returns (uint256 policyId) {
         InsuranceProvider storage provider = providers[providerId];
-        if (!provider.isActive) revert ProviderNotActive();
-        if (durationDays < 30 || durationDays > 3650) revert InvalidDuration();
+        require(provider.isActive, "Provider not active");
+        require(durationDays >= 30 && durationDays <= 3650, "Invalid duration");
 
         // Verify holder has the credits
-        if (carbonCreditToken.balanceOf(msg.sender, tokenId) < creditsToInsure)
-            revert InsufficientCredits();
+        require(
+            carbonCreditToken.balanceOf(msg.sender, tokenId) >= creditsToInsure,
+            "Insufficient credits"
+        );
 
         // Calculate and verify premium
         uint256 premium = calculatePremium(
@@ -430,15 +407,17 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
             durationDays,
             coverageType
         );
-        if (msg.value < premium) revert InsufficientPremium();
+        require(msg.value >= premium, "Insufficient premium");
 
         // SECURITY FIX: Check available capital (reserve - already committed)
         // Require 10% reserve ratio against ALL outstanding coverage
         uint256 availableCapital = provider.capitalReserve > committedCapital[providerId]
             ? provider.capitalReserve - committedCapital[providerId]
             : 0;
-        if (availableCapital < coverageAmount / 10)
-            revert InsufficientProviderCapital();
+        require(
+            availableCapital >= coverageAmount / 10,
+            "Insufficient provider capital"
+        );
 
         policyId = nextPolicyId++;
 
@@ -468,7 +447,7 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
         // Refund excess payment
         if (msg.value > premium) {
             (bool success, ) = msg.sender.call{value: msg.value - premium}("");
-            if (!success) revert RefundFailed();
+            require(success, "Refund failed");
         }
 
         emit PolicyIssued(policyId, providerId, msg.sender, tokenId, coverageAmount);
@@ -489,9 +468,9 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
      */
     function cancelPolicy(uint256 policyId) external nonReentrant {
         InsurancePolicy storage policy = policies[policyId];
-        if (policy.policyHolder != msg.sender) revert NotPolicyHolder();
-        if (policy.status != PolicyStatus.ACTIVE) revert PolicyNotActive();
-        if (policyClaims[policyId].length > 0) revert HasClaims();
+        require(policy.policyHolder == msg.sender, "Not policy holder");
+        require(policy.status == PolicyStatus.ACTIVE, "Not active");
+        require(policyClaims[policyId].length == 0, "Has claims");
 
         policy.status = PolicyStatus.CANCELLED;
 
@@ -505,11 +484,11 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
         // SECURITY FIX: Decrement provider capital reserve by the refund amount
         // This ensures the accounting stays in sync with actual ETH balance
         if (refund > 0) {
-            if (provider.capitalReserve < refund) revert InsufficientReserveForRefund();
+            require(provider.capitalReserve >= refund, "Insufficient reserve for refund");
             provider.capitalReserve -= refund;
 
             (bool success, ) = msg.sender.call{value: refund}("");
-            if (!success) revert RefundFailed();
+            require(success, "Refund failed");
         }
 
         // SECURITY FIX: Release committed capital since policy is no longer active
@@ -534,10 +513,10 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
         string calldata evidenceHash
     ) external returns (uint256 claimId) {
         InsurancePolicy storage policy = policies[policyId];
-        if (policy.policyHolder != msg.sender) revert NotPolicyHolder();
-        if (!isPolicyActive(policyId)) revert PolicyNotActive();
-        if (claimAmount > policy.coverageAmount) revert ExceedsCoverage();
-        if (bytes(evidenceHash).length == 0) revert EvidenceRequired();
+        require(policy.policyHolder == msg.sender, "Not policy holder");
+        require(isPolicyActive(policyId), "Policy not active");
+        require(claimAmount <= policy.coverageAmount, "Exceeds coverage");
+        require(bytes(evidenceHash).length > 0, "Evidence required");
 
         claimId = nextClaimId++;
 
@@ -571,11 +550,11 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
         string calldata resolutionNotes
     ) external onlyRole(CLAIMS_ADJUSTER_ROLE) {
         InsuranceClaim storage claim = claims[claimId];
-        if (claim.status != ClaimStatus.SUBMITTED && claim.status != ClaimStatus.UNDER_REVIEW)
-            revert InvalidClaimStatus();
+        require(claim.status == ClaimStatus.SUBMITTED || 
+                claim.status == ClaimStatus.UNDER_REVIEW, "Invalid status");
 
         if (approved) {
-            if (approvedAmount > claim.claimAmount) revert ExceedsClaimAmount();
+            require(approvedAmount <= claim.claimAmount, "Exceeds claim amount");
             claim.status = ClaimStatus.APPROVED;
             claim.approvedAmount = approvedAmount;
             policies[claim.policyId].status = PolicyStatus.CLAIMED;
@@ -597,12 +576,12 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
      */
     function payClaim(uint256 claimId) external onlyRole(CLAIMS_ADJUSTER_ROLE) nonReentrant {
         InsuranceClaim storage claim = claims[claimId];
-        if (claim.status != ClaimStatus.APPROVED) revert ClaimNotApproved();
+        require(claim.status == ClaimStatus.APPROVED, "Not approved");
 
         InsurancePolicy storage policy = policies[claim.policyId];
         InsuranceProvider storage provider = providers[policy.providerId];
 
-        if (provider.capitalReserve < claim.approvedAmount) revert InsufficientReserve();
+        require(provider.capitalReserve >= claim.approvedAmount, "Insufficient reserve");
 
         provider.capitalReserve -= claim.approvedAmount;
         provider.totalClaimsPaid += claim.approvedAmount;
@@ -616,7 +595,7 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
         }
 
         (bool success, ) = claim.claimant.call{value: claim.approvedAmount}("");
-        if (!success) revert PaymentFailed();
+        require(success, "Payment failed");
 
         emit ClaimPaid(claimId, claim.claimant, claim.approvedAmount);
     }
@@ -633,7 +612,7 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
      * 3. All users see the same effective score at any given time
      */
     function scheduleRiskScoreUpdate(uint256 tokenId, uint256 newScore) external onlyRole(UNDERWRITER_ROLE) {
-        if (newScore > 10000) revert InvalidScore();
+        require(newScore <= 10000, "Score must be <= 10000");
 
         // First, apply any pending update that's now effective
         _applyPendingRiskScore(tokenId);
@@ -675,7 +654,7 @@ contract InsuranceManager is AccessControl, ReentrancyGuard {
      * @notice Should only be used in emergencies; prefer scheduleRiskScoreUpdate
      */
     function updateRiskScoreEmergency(uint256 tokenId, uint256 score) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (score > 10000) revert InvalidScore();
+        require(score <= 10000, "Score must be <= 10000");
 
         // Clear any pending update
         pendingRiskScores[tokenId].exists = false;
