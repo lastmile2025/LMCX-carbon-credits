@@ -261,65 +261,65 @@ contract ComplianceManager is AccessControl, ReentrancyGuard {
     function performComplianceChecks(uint256 requestId) public onlyRole(ADMIN_ROLE) {
         MintingRequest storage r = _getExistingRequest(requestId);
 
-        // ISO 14064-2/3 check (primary standard for project-level GHG)
-        bool iso14064Ok = iso14064Validator.isProjectCompliant(r.projectId);
-        uint256 iso14064Score = iso14064Validator.getComplianceScore(r.projectId);
+        // Run checks in separate functions to avoid stack too deep
+        _checkPrimaryCompliance(r);
+        _checkSecondaryCompliance(r);
+        uint256 aggregateScore = _calculateAggregateScore(r.projectId);
+        r.aggregateComplianceScore = aggregateScore;
 
-        // OGMP 2.0 checks (for oil & gas methane projects)
-        bool ogmpOk = ogmpValidator.isProjectCompliant(r.projectId);
-        bool ogmpGold = ogmpValidator.meetsGoldStandard(r.projectId);
-        uint256 ogmpScore = ogmpValidator.getComplianceScore(r.projectId);
+        emit ComplianceChecked(
+            requestId,
+            r.iso14064Compliant,
+            r.ogmpCompliant,
+            r.isoVerified,
+            r.corsiaEligible,
+            r.epaSubpartWCompliant,
+            r.cdmAM0023Compliant,
+            r.vintageEligible,
+            aggregateScore
+        );
+    }
 
-        // Legacy ISO 14065 verification body check
-        bool isoOk = isoVerifier.isProjectVerified(r.projectId);
+    /**
+     * @dev Check primary compliance standards (ISO 14064, OGMP, ISO 14065)
+     */
+    function _checkPrimaryCompliance(MintingRequest storage r) internal {
+        r.iso14064Compliant = iso14064Validator.isProjectCompliant(r.projectId);
+        r.ogmpCompliant = ogmpValidator.isProjectCompliant(r.projectId);
+        r.ogmpGoldStandard = ogmpValidator.meetsGoldStandard(r.projectId);
+        r.isoVerified = isoVerifier.isProjectVerified(r.projectId);
+    }
 
-        // CORSIA eligibility
-        bool corsiaOk = corsiaCompliance.isProjectEligible(r.projectId);
-
-        // EPA Subpart W check (for US facilities)
-        bool epaOk = epaSubpartWValidator.isProjectCompliant(r.projectId);
-        uint256 epaScore = epaSubpartWValidator.getComplianceScore(r.projectId);
-
-        // CDM AM0023 check (for waste management methane projects)
-        bool cdmOk = cdmAM0023Validator.isProjectCompliant(r.projectId);
-        uint256 cdmScore = cdmAM0023Validator.getComplianceScore(r.projectId);
+    /**
+     * @dev Check secondary compliance standards (CORSIA, EPA, CDM, vintage)
+     */
+    function _checkSecondaryCompliance(MintingRequest storage r) internal {
+        r.corsiaEligible = corsiaCompliance.isProjectEligible(r.projectId);
+        r.epaSubpartWCompliant = epaSubpartWValidator.isProjectCompliant(r.projectId);
+        r.cdmAM0023Compliant = cdmAM0023Validator.isProjectCompliant(r.projectId);
 
         // Vintage eligibility: require CORSIA & CDM agreement
         bool corsiaVintageOk = corsiaCompliance.isVintageYearEligible(r.projectId, r.vintageYear);
         bool cdmVintageOk = cdmAM0023Validator.isVintageEligible(r.projectId, r.vintageYear);
-        bool vintageOk = corsiaVintageOk && cdmVintageOk;
+        r.vintageEligible = corsiaVintageOk && cdmVintageOk;
+    }
 
-        // Calculate aggregate compliance score (weighted average)
-        // ISO 14064: 30%, OGMP: 25%, EPA: 20%, CDM: 25%
-        uint256 aggregateScore = (
+    /**
+     * @dev Calculate aggregate compliance score (weighted average)
+     * ISO 14064: 30%, OGMP: 25%, EPA: 20%, CDM: 25%
+     */
+    function _calculateAggregateScore(bytes32 projectId) internal view returns (uint256) {
+        uint256 iso14064Score = iso14064Validator.getComplianceScore(projectId);
+        uint256 ogmpScore = ogmpValidator.getComplianceScore(projectId);
+        uint256 epaScore = epaSubpartWValidator.getComplianceScore(projectId);
+        uint256 cdmScore = cdmAM0023Validator.getComplianceScore(projectId);
+
+        return (
             (iso14064Score * 3000) +
             (ogmpScore * 2500) +
             (epaScore * 2000) +
             (cdmScore * 2500)
         ) / 10000;
-
-        // Store results
-        r.iso14064Compliant = iso14064Ok;
-        r.ogmpCompliant = ogmpOk;
-        r.ogmpGoldStandard = ogmpGold;
-        r.isoVerified = isoOk;
-        r.corsiaEligible = corsiaOk;
-        r.epaSubpartWCompliant = epaOk;
-        r.cdmAM0023Compliant = cdmOk;
-        r.vintageEligible = vintageOk;
-        r.aggregateComplianceScore = aggregateScore;
-
-        emit ComplianceChecked(
-            requestId,
-            iso14064Ok,
-            ogmpOk,
-            isoOk,
-            corsiaOk,
-            epaOk,
-            cdmOk,
-            vintageOk,
-            aggregateScore
-        );
     }
 
     /**
