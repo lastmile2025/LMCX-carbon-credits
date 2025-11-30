@@ -111,6 +111,23 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
     bytes32 public constant GOVERNANCE_ROLE = keccak256("GOVERNANCE_ROLE");
     bytes32 public constant VINTAGE_TRACKER_ROLE = keccak256("VINTAGE_TRACKER_ROLE");
 
+    // ============ Custom Errors ============
+    error InvalidBeneficiary();
+    error AmountMustBePositive();
+    error VerificationHashRequired();
+    error OracleCircuitBreakerActive();
+    error CreditVerificationRequired();
+    error InsufficientBalance();
+    error RetirementReasonRequired();
+    error InsuranceFeatureNotEnabled();
+    error TokenDoesNotExist();
+    error RatingsFeatureNotEnabled();
+    error InvalidAddress();
+    error OracleAggregatorNotSet();
+    error TokenIdNotExist();
+    error TransferRestrictedByVintageTracker();
+    error TransferRequiresVerifiedCredit();
+
     string public name = "LMCX Carbon Credit";
     string public symbol = "LMCXCC";
     string private _baseURI;
@@ -364,13 +381,13 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
         string memory verificationHash,
         bytes32 jurisdictionCode
     ) public onlyRole(COMPLIANCE_MANAGER_ROLE) whenNotPaused returns (uint256 mintId, uint256 tokenId) {
-        require(to != address(0), "Invalid beneficiary");
-        require(amount > 0, "Amount must be > 0");
-        require(bytes(verificationHash).length > 0, "Verification hash required");
+        if (to == address(0)) revert InvalidBeneficiary();
+        if (amount == 0) revert AmountMustBePositive();
+        if (bytes(verificationHash).length == 0) revert VerificationHashRequired();
 
         // Check oracle circuit breaker
         if (oracleAggregator != address(0)) {
-            require(!IOracleAggregator(oracleAggregator).circuitBreakerActive(), "Oracle circuit breaker active");
+            if (IOracleAggregator(oracleAggregator).circuitBreakerActive()) revert OracleCircuitBreakerActive();
         }
 
         tokenId = generateTokenId(projectId, vintageYear);
@@ -380,7 +397,7 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
         if (requireVerificationForMint && verificationRegistry != address(0)) {
             bool isVerified = IVerificationRegistry(verificationRegistry).isCreditVerified(creditId);
             emit VerificationRequired(tokenId, creditId, isVerified);
-            require(isVerified, "Credit verification required");
+            if (!isVerified) revert CreditVerificationRequired();
         }
 
         if (!_creditMetadata[tokenId].exists) {
@@ -479,8 +496,8 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
         string memory retirementReason,
         string memory beneficiaryName
     ) external whenNotPaused {
-        require(balanceOf(msg.sender, tokenId) >= amount, "Insufficient balance");
-        require(bytes(retirementReason).length > 0, "Retirement reason required");
+        if (balanceOf(msg.sender, tokenId) < amount) revert InsufficientBalance();
+        if (bytes(retirementReason).length == 0) revert RetirementReasonRequired();
 
         bytes32 creditId = tokenToCreditId[tokenId];
 
@@ -521,8 +538,8 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
         string memory beneficiaryName,
         string memory certificateHash
     ) external whenNotPaused {
-        require(balanceOf(msg.sender, tokenId) >= amount, "Insufficient balance");
-        require(bytes(retirementReason).length > 0, "Retirement reason required");
+        if (balanceOf(msg.sender, tokenId) < amount) revert InsufficientBalance();
+        if (bytes(retirementReason).length == 0) revert RetirementReasonRequired();
 
         bytes32 creditId = tokenToCreditId[tokenId];
 
@@ -565,8 +582,8 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
         uint256 maxCoverage,
         uint256 riskScore
     ) external onlyRole(INSURANCE_MANAGER_ROLE) {
-        require(insuranceEnabled, "Insurance feature not enabled");
-        require(_tokenIdExists[tokenId], "Token does not exist");
+        if (!insuranceEnabled) revert InsuranceFeatureNotEnabled();
+        if (!_tokenIdExists[tokenId]) revert TokenDoesNotExist();
 
         insuranceStatus[tokenId] = InsuranceStatus({
             isInsurable: isInsurable,
@@ -608,8 +625,8 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
         string memory grade,
         uint256 ratingCount
     ) external onlyRole(RATING_AGENCY_ROLE) {
-        require(ratingsEnabled, "Ratings feature not enabled");
-        require(_tokenIdExists[tokenId], "Token does not exist");
+        if (!ratingsEnabled) revert RatingsFeatureNotEnabled();
+        if (!_tokenIdExists[tokenId]) revert TokenDoesNotExist();
 
         ratingInfo[tokenId] = RatingInfo({
             aggregatedScore: aggregatedScore,
@@ -658,7 +675,7 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
         uint256 measurementCount,
         bool hasActiveAlerts
     ) external onlyRole(DMRV_ORACLE_ROLE) {
-        require(_tokenIdExists[tokenId], "Token does not exist");
+        if (!_tokenIdExists[tokenId]) revert TokenDoesNotExist();
         
         dmrvStatus[tokenId] = DMRVStatus({
             isMonitored: true,
@@ -707,7 +724,7 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
         bool lineageTracked,
         bytes32 complianceDataId
     ) external onlyRole(COMPLIANCE_MANAGER_ROLE) {
-        require(_tokenIdExists[tokenId], "Token does not exist");
+        if (!_tokenIdExists[tokenId]) revert TokenDoesNotExist();
         
         smartCompliance[tokenId] = SMARTCompliance({
             locationVerified: locationVerified,
@@ -765,9 +782,9 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
             DMRVStatus memory dmrv,
             SMARTCompliance memory smart,
             uint256 totalSupply
-        ) 
+        )
     {
-        require(_tokenIdExists[tokenId], "Token does not exist");
+        if (!_tokenIdExists[tokenId]) revert TokenDoesNotExist();
         
         metadata = _creditMetadata[tokenId];
         insurance = insuranceStatus[tokenId];
@@ -779,21 +796,21 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
 
     // ============ Metadata Functions ============
 
-    function getCreditMetadata(uint256 tokenId) 
-        external 
-        view 
-        returns (CreditMetadata memory) 
+    function getCreditMetadata(uint256 tokenId)
+        external
+        view
+        returns (CreditMetadata memory)
     {
-        require(_creditMetadata[tokenId].exists, "Token ID does not exist");
+        if (!_creditMetadata[tokenId].exists) revert TokenIdNotExist();
         return _creditMetadata[tokenId];
     }
 
-    function getMintRecord(uint256 mintId) 
-        external 
-        view 
-        returns (MintRecord memory) 
+    function getMintRecord(uint256 mintId)
+        external
+        view
+        returns (MintRecord memory)
     {
-        require(mintId < nextMintId, "Invalid mintId");
+        if (mintId >= nextMintId) revert TokenIdNotExist();
         return _mintRecords[mintId];
     }
 
@@ -859,7 +876,7 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
         external
         onlyRole(DEFAULT_ADMIN_ROLE)
     {
-        require(complianceManager != address(0), "Invalid address");
+        if (complianceManager == address(0)) revert InvalidAddress();
         _grantRole(COMPLIANCE_MANAGER_ROLE, complianceManager);
         emit ComplianceManagerSet(complianceManager);
     }
@@ -1036,7 +1053,7 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
         view
         returns (int256 value, uint256 timestamp, uint256 quality)
     {
-        require(oracleAggregator != address(0), "Oracle aggregator not set");
+        if (oracleAggregator == address(0)) revert OracleAggregatorNotSet();
         return IOracleAggregator(oracleAggregator).getLatestValue(feedId);
     }
 
@@ -1047,7 +1064,7 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
     }
 
     function uri(uint256 tokenId) public view override returns (string memory) {
-        require(_creditMetadata[tokenId].exists, "URI query for nonexistent token");
+        if (!_creditMetadata[tokenId].exists) revert TokenIdNotExist();
         return string(abi.encodePacked(_baseURI, tokenId.toString()));
     }
 
@@ -1081,7 +1098,7 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
                     bool isTransferable = IVintageTracker(vintageTracker).isTransferable(creditId);
                     if (!isTransferable) {
                         emit TransferRestricted(tokenId, from, to, "Lifecycle restriction");
-                        revert("Transfer restricted by vintage tracker");
+                        revert TransferRestrictedByVintageTracker();
                     }
                 }
 
@@ -1090,7 +1107,7 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
                     bool isVerified = IVerificationRegistry(verificationRegistry).isCreditVerified(creditId);
                     if (!isVerified) {
                         emit TransferRestricted(tokenId, from, to, "Credit not verified");
-                        revert("Transfer requires verified credit");
+                        revert TransferRequiresVerifiedCredit();
                     }
                 }
             }

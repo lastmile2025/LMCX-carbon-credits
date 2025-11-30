@@ -30,6 +30,19 @@ contract RatingAgencyRegistry is AccessControl {
     bytes32 public constant REGISTRY_ADMIN_ROLE = keccak256("REGISTRY_ADMIN_ROLE");
     bytes32 public constant RATING_AGENCY_ROLE = keccak256("RATING_AGENCY_ROLE");
 
+    // ============ Custom Errors ============
+    error InvalidAgencyId();
+    error AgencyExists();
+    error InvalidAddress();
+    error AgencyNotFound();
+    error AgencyNotAccredited();
+    error InvalidScore();
+    error InvalidValidity();
+    error NoExistingRating();
+    error RatingNotActive();
+    error InvalidActionType();
+    error InvalidDirection();
+
     // ============ Data Structures ============
 
     /// @notice Rating agency registration
@@ -184,9 +197,9 @@ contract RatingAgencyRegistry is AccessControl {
         string calldata accreditationHash,
         string[] calldata certifications
     ) external onlyRole(REGISTRY_ADMIN_ROLE) {
-        require(agencyId != bytes32(0), "Invalid agencyId");
-        require(agencies[agencyId].agencyId == bytes32(0), "Agency exists");
-        require(ratingAddress != address(0), "Invalid address");
+        if (agencyId == bytes32(0)) revert InvalidAgencyId();
+        if (agencies[agencyId].agencyId != bytes32(0)) revert AgencyExists();
+        if (ratingAddress == address(0)) revert InvalidAddress();
 
         agencies[agencyId] = RatingAgency({
             agencyId: agencyId,
@@ -215,7 +228,7 @@ contract RatingAgencyRegistry is AccessControl {
         bytes32 agencyId,
         bool isAccredited
     ) external onlyRole(REGISTRY_ADMIN_ROLE) {
-        require(agencies[agencyId].agencyId != bytes32(0), "Agency not found");
+        if (agencies[agencyId].agencyId == bytes32(0)) revert AgencyNotFound();
         agencies[agencyId].isAccredited = isAccredited;
         
         if (!isAccredited) {
@@ -262,9 +275,9 @@ contract RatingAgencyRegistry is AccessControl {
         RatingBreakdown calldata breakdown
     ) external onlyRole(RATING_AGENCY_ROLE) returns (bytes32 ratingId) {
         bytes32 agencyId = addressToAgency[msg.sender];
-        require(agencies[agencyId].isAccredited, "Agency not accredited");
-        require(score <= 10000, "Invalid score");
-        require(validityDays >= 30 && validityDays <= 365, "Invalid validity");
+        if (!agencies[agencyId].isAccredited) revert AgencyNotAccredited();
+        if (score > 10000) revert InvalidScore();
+        if (validityDays < 30 || validityDays > 365) revert InvalidValidity();
 
         ratingId = keccak256(abi.encodePacked(agencyId, tokenId, block.timestamp));
         
@@ -316,16 +329,16 @@ contract RatingAgencyRegistry is AccessControl {
     ) external onlyRole(RATING_AGENCY_ROLE) {
         bytes32 agencyId = addressToAgency[msg.sender];
         bytes32 ratingId = agencyTokenRating[agencyId][tokenId];
-        
-        require(ratingId != bytes32(0), "No existing rating");
-        require(ratings[ratingId].isActive, "Rating not active");
-        require(newScore <= 10000, "Invalid score");
-        require(
-            keccak256(bytes(actionType)) == keccak256(bytes("UPGRADE")) ||
-            keccak256(bytes(actionType)) == keccak256(bytes("DOWNGRADE")) ||
-            keccak256(bytes(actionType)) == keccak256(bytes("AFFIRM")),
-            "Invalid action type"
-        );
+
+        if (ratingId == bytes32(0)) revert NoExistingRating();
+        if (!ratings[ratingId].isActive) revert RatingNotActive();
+        if (newScore > 10000) revert InvalidScore();
+
+        bytes32 actionHash = keccak256(bytes(actionType));
+        bool validAction = actionHash == keccak256(bytes("UPGRADE")) ||
+                           actionHash == keccak256(bytes("DOWNGRADE")) ||
+                           actionHash == keccak256(bytes("AFFIRM"));
+        if (!validAction) revert InvalidActionType();
 
         Rating storage rating = ratings[ratingId];
         uint256 previousScore = rating.score;
@@ -354,9 +367,9 @@ contract RatingAgencyRegistry is AccessControl {
     ) external onlyRole(RATING_AGENCY_ROLE) {
         bytes32 agencyId = addressToAgency[msg.sender];
         bytes32 ratingId = agencyTokenRating[agencyId][tokenId];
-        
-        require(ratingId != bytes32(0), "No existing rating");
-        require(ratings[ratingId].isActive, "Rating not active");
+
+        if (ratingId == bytes32(0)) revert NoExistingRating();
+        if (!ratings[ratingId].isActive) revert RatingNotActive();
 
         Rating storage rating = ratings[ratingId];
         uint256 previousScore = rating.score;
@@ -383,13 +396,12 @@ contract RatingAgencyRegistry is AccessControl {
         string calldata reason
     ) external onlyRole(RATING_AGENCY_ROLE) {
         bytes32 agencyId = addressToAgency[msg.sender];
-        
-        require(
-            keccak256(bytes(direction)) == keccak256(bytes("POSITIVE")) ||
-            keccak256(bytes(direction)) == keccak256(bytes("NEGATIVE")) ||
-            keccak256(bytes(direction)) == keccak256(bytes("DEVELOPING")),
-            "Invalid direction"
-        );
+
+        bytes32 dirHash = keccak256(bytes(direction));
+        bool validDirection = dirHash == keccak256(bytes("POSITIVE")) ||
+                              dirHash == keccak256(bytes("NEGATIVE")) ||
+                              dirHash == keccak256(bytes("DEVELOPING"));
+        if (!validDirection) revert InvalidDirection();
 
         watchList[tokenId].push(WatchListEntry({
             tokenId: tokenId,

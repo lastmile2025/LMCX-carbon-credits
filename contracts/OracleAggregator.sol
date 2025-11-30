@@ -23,6 +23,26 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
     bytes32 public constant ORACLE_NODE_ROLE = keccak256("ORACLE_NODE_ROLE");
     bytes32 public constant ANOMALY_RESOLVER_ROLE = keccak256("ANOMALY_RESOLVER_ROLE");
 
+    // ============ Custom Errors ============
+    error InvalidAddress();
+    error AlreadyRegistered();
+    error InvalidWeight();
+    error MaxOraclesReached();
+    error OracleNotFound();
+    error InvalidFeedId();
+    error FeedExists();
+    error MinOraclesTooLow();
+    error DeviationTooHigh();
+    error FeedNotFound();
+    error FeedNotActive();
+    error InvalidConfidence();
+    error CircuitBreakerIsActive();
+    error OracleNotActive();
+    error AlreadyResolved();
+    error ResolveAnomaliesFirst();
+    error AttestationExists();
+    error InvalidThreshold();
+
     // ============ Constants ============
     uint256 public constant MIN_ORACLES = 3;
     uint256 public constant MAX_ORACLES = 20;
@@ -238,12 +258,12 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
     // ============ Modifiers ============
 
     modifier onlyActiveOracle() {
-        require(oracles[msg.sender].status == OracleStatus.Active, "Oracle not active");
+        if (oracles[msg.sender].status != OracleStatus.Active) revert OracleNotActive();
         _;
     }
 
     modifier feedExists(bytes32 feedId) {
-        require(dataFeeds[feedId].feedId != bytes32(0), "Feed not found");
+        if (dataFeeds[feedId].feedId == bytes32(0)) revert FeedNotFound();
         _;
     }
 
@@ -269,10 +289,10 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
         bool isChainlink,
         bytes32 jobId
     ) external onlyRole(ORACLE_ADMIN_ROLE) {
-        require(oracleAddress != address(0), "Invalid address");
-        require(oracles[oracleAddress].oracleAddress == address(0), "Already registered");
-        require(weight > 0 && weight <= 10000, "Invalid weight");
-        require(activeOracleCount < MAX_ORACLES, "Max oracles reached");
+        if (oracleAddress == address(0)) revert InvalidAddress();
+        if (oracles[oracleAddress].oracleAddress != address(0)) revert AlreadyRegistered();
+        if (weight == 0 || weight > 10000) revert InvalidWeight();
+        if (activeOracleCount >= MAX_ORACLES) revert MaxOraclesReached();
 
         oracles[oracleAddress] = OracleConfig({
             oracleAddress: oracleAddress,
@@ -304,7 +324,7 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
         external
         onlyRole(ORACLE_ADMIN_ROLE)
     {
-        require(oracles[oracleAddress].oracleAddress != address(0), "Oracle not found");
+        if (oracles[oracleAddress].oracleAddress == address(0)) revert OracleNotFound();
 
         OracleStatus oldStatus = oracles[oracleAddress].status;
         oracles[oracleAddress].status = newStatus;
@@ -325,8 +345,8 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
         external
         onlyRole(ORACLE_ADMIN_ROLE)
     {
-        require(oracles[oracleAddress].oracleAddress != address(0), "Oracle not found");
-        require(newWeight > 0 && newWeight <= 10000, "Invalid weight");
+        if (oracles[oracleAddress].oracleAddress == address(0)) revert OracleNotFound();
+        if (newWeight == 0 || newWeight > 10000) revert InvalidWeight();
 
         oracles[oracleAddress].weight = newWeight;
     }
@@ -346,10 +366,10 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
         uint256 maxDeviation,
         uint256 heartbeat
     ) external onlyRole(ORACLE_ADMIN_ROLE) {
-        require(feedId != bytes32(0), "Invalid feedId");
-        require(dataFeeds[feedId].feedId == bytes32(0), "Feed exists");
-        require(minOracles >= MIN_ORACLES, "Min oracles too low");
-        require(maxDeviation <= MAX_DEVIATION_PERCENTAGE, "Deviation too high");
+        if (feedId == bytes32(0)) revert InvalidFeedId();
+        if (dataFeeds[feedId].feedId != bytes32(0)) revert FeedExists();
+        if (minOracles < MIN_ORACLES) revert MinOraclesTooLow();
+        if (maxDeviation > MAX_DEVIATION_PERCENTAGE) revert DeviationTooHigh();
 
         dataFeeds[feedId] = DataFeed({
             feedId: feedId,
@@ -381,9 +401,9 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
         uint256 confidence,
         string calldata sourceRef
     ) external onlyActiveOracle feedExists(feedId) whenNotPaused nonReentrant {
-        require(dataFeeds[feedId].isActive, "Feed not active");
-        require(confidence <= 10000, "Invalid confidence");
-        require(!circuitBreakerActive, "Circuit breaker active");
+        if (!dataFeeds[feedId].isActive) revert FeedNotActive();
+        if (confidence > 10000) revert InvalidConfidence();
+        if (circuitBreakerActive) revert CircuitBreakerIsActive();
 
         bytes32 submissionId = keccak256(abi.encodePacked(
             feedId,
@@ -747,7 +767,7 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
         external
         onlyRole(ANOMALY_RESOLVER_ROLE)
     {
-        require(!anomalies[anomalyId].isResolved, "Already resolved");
+        if (anomalies[anomalyId].isResolved) revert AlreadyResolved();
 
         anomalies[anomalyId].isResolved = true;
         anomalies[anomalyId].resolvedBy = msg.sender;
@@ -761,7 +781,7 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
      * @dev Reset circuit breaker
      */
     function resetCircuitBreaker() external onlyRole(ORACLE_ADMIN_ROLE) {
-        require(unresolvedAnomalyCount < circuitBreakerThreshold, "Resolve anomalies first");
+        if (unresolvedAnomalyCount >= circuitBreakerThreshold) revert ResolveAnomaliesFirst();
         circuitBreakerActive = false;
     }
 
@@ -825,7 +845,7 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
         bytes32 publicKeyHash,
         uint256 validityPeriod
     ) external onlyRole(ORACLE_ADMIN_ROLE) {
-        require(hsmAttestations[attestationId].attestationId == bytes32(0), "Attestation exists");
+        if (hsmAttestations[attestationId].attestationId != bytes32(0)) revert AttestationExists();
 
         hsmAttestations[attestationId] = HSMAttestation({
             attestationId: attestationId,
@@ -939,7 +959,7 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
      * @dev Set circuit breaker threshold
      */
     function setCircuitBreakerThreshold(uint256 threshold) external onlyRole(ORACLE_ADMIN_ROLE) {
-        require(threshold > 0, "Invalid threshold");
+        if (threshold == 0) revert InvalidThreshold();
         circuitBreakerThreshold = threshold;
     }
 
@@ -950,7 +970,7 @@ contract OracleAggregator is AccessControl, ReentrancyGuard, Pausable {
         external
         onlyRole(ORACLE_ADMIN_ROLE)
     {
-        require(oracles[oracleAddress].oracleAddress != address(0), "Oracle not found");
+        if (oracles[oracleAddress].oracleAddress == address(0)) revert OracleNotFound();
 
         int256 newRep = int256(oracles[oracleAddress].reputation) + change;
         if (newRep < 0) newRep = 0;

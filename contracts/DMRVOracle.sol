@@ -20,6 +20,24 @@ import {Pausable} from "@openzeppelin/contracts/security/Pausable.sol";
  * - Automatic alert generation for threshold violations
  */
 contract DMRVOracle is AccessControl, Pausable {
+    // ============ Custom Errors ============
+    error InvalidSensorId();
+    error InvalidProjectId();
+    error SensorAlreadyRegistered();
+    error SensorNotFound();
+    error ExpiryMustBeFuture();
+    error InvalidMeasurementId();
+    error InvalidOrUncalibratedSensor();
+    error MeasurementExists();
+    error ArrayMismatch();
+    error MeasurementNotFound();
+    error AlreadyResolved();
+    error InvalidReportId();
+    error InvalidPeriod();
+    error ReportExists();
+    error ReportNotFound();
+    error AlreadyVerified();
+
     bytes32 public constant ORACLE_OPERATOR_ROLE = keccak256("ORACLE_OPERATOR_ROLE");
     bytes32 public constant DATA_VALIDATOR_ROLE = keccak256("DATA_VALIDATOR_ROLE");
     bytes32 public constant ENOVATE_NODE_ROLE = keccak256("ENOVATE_NODE_ROLE");
@@ -198,9 +216,9 @@ contract DMRVOracle is AccessControl, Pausable {
         int256 calibrationFactor,
         uint256 calibrationExpiry
     ) external onlyRole(ORACLE_OPERATOR_ROLE) {
-        require(sensorId != bytes32(0), "Invalid sensorId");
-        require(projectId != bytes32(0), "Invalid projectId");
-        require(!sensors[sensorId].isActive, "Sensor already registered");
+        if (sensorId == bytes32(0)) revert InvalidSensorId();
+        if (projectId == bytes32(0)) revert InvalidProjectId();
+        if (sensors[sensorId].isActive) revert SensorAlreadyRegistered();
 
         sensors[sensorId] = SensorConfig({
             sensorId: sensorId,
@@ -227,8 +245,9 @@ contract DMRVOracle is AccessControl, Pausable {
         int256 newCalibrationFactor,
         uint256 newExpiry
     ) external onlyRole(ORACLE_OPERATOR_ROLE) {
-        require(sensors[sensorId].isActive, "Sensor not found");
-        require(newExpiry > block.timestamp, "Expiry must be future");
+        if (!sensors[sensorId].isActive) revert SensorNotFound();
+        // solhint-disable-next-line not-rely-on-time
+        if (newExpiry <= block.timestamp) revert ExpiryMustBeFuture();
 
         sensors[sensorId].calibrationFactor = newCalibrationFactor;
         sensors[sensorId].lastCalibration = block.timestamp;
@@ -259,10 +278,10 @@ contract DMRVOracle is AccessControl, Pausable {
         string calldata measurementType,
         bytes32 dataHash
     ) external onlyRole(ENOVATE_NODE_ROLE) whenNotPaused {
-        require(measurementId != bytes32(0), "Invalid measurementId");
-        require(projectId != bytes32(0), "Invalid projectId");
-        require(isSensorValid(sensorId), "Invalid or uncalibrated sensor");
-        require(measurements[measurementId].measurementId == bytes32(0), "Measurement exists");
+        if (measurementId == bytes32(0)) revert InvalidMeasurementId();
+        if (projectId == bytes32(0)) revert InvalidProjectId();
+        if (!isSensorValid(sensorId)) revert InvalidOrUncalibratedSensor();
+        if (measurements[measurementId].measurementId != bytes32(0)) revert MeasurementExists();
 
         // Apply calibration factor
         int256 calibratedValue = (value * sensors[sensorId].calibrationFactor) / 1e6;
@@ -302,41 +321,57 @@ contract DMRVOracle is AccessControl, Pausable {
         string[] calldata measurementTypes,
         bytes32[] calldata dataHashes
     ) external onlyRole(ENOVATE_NODE_ROLE) whenNotPaused {
-        require(measurementIds.length == sensorIds.length, "Array mismatch");
-        require(measurementIds.length == values.length, "Array mismatch");
+        if (measurementIds.length != sensorIds.length) revert ArrayMismatch();
+        if (measurementIds.length != values.length) revert ArrayMismatch();
 
         for (uint256 i = 0; i < measurementIds.length; i++) {
-            if (isSensorValid(sensorIds[i])) {
-                int256 calibratedValue = (values[i] * sensors[sensorIds[i]].calibrationFactor) / 1e6;
-
-                measurements[measurementIds[i]] = MeasurementData({
-                    measurementId: measurementIds[i],
-                    projectId: projectId,
-                    sensorId: sensorIds[i],
-                    timestamp: block.timestamp,
-                    value: calibratedValue,
-                    unit: units[i],
-                    measurementType: measurementTypes[i],
-                    dataHash: dataHashes[i],
-                    isValidated: false,
-                    hasAnomaly: false
-                });
-
-                projectMeasurements[projectId].push(measurementIds[i]);
-                measurementCounts[projectId]++;
-
-                emit MeasurementReceived(
-                    measurementIds[i], 
-                    projectId, 
-                    sensorIds[i], 
-                    calibratedValue, 
-                    measurementTypes[i], 
-                    block.timestamp
-                );
-            }
+            _processBatchMeasurement(
+                measurementIds[i],
+                projectId,
+                sensorIds[i],
+                values[i],
+                units[i],
+                measurementTypes[i],
+                dataHashes[i]
+            );
         }
 
         latestMeasurement[projectId] = measurementIds[measurementIds.length - 1];
+    }
+
+    /**
+     * @dev Internal helper to process a single batch measurement (reduces stack depth)
+     */
+    function _processBatchMeasurement(
+        bytes32 measurementId,
+        bytes32 projectId,
+        bytes32 sensorId,
+        int256 value,
+        string calldata unit,
+        string calldata measurementType,
+        bytes32 dataHash
+    ) internal {
+        if (!isSensorValid(sensorId)) return;
+
+        int256 calibratedValue = (value * sensors[sensorId].calibrationFactor) / 1e6;
+
+        // Write directly to storage to reduce stack depth
+        MeasurementData storage m = measurements[measurementId];
+        m.measurementId = measurementId;
+        m.projectId = projectId;
+        m.sensorId = sensorId;
+        m.timestamp = block.timestamp;
+        m.value = calibratedValue;
+        m.unit = unit;
+        m.measurementType = measurementType;
+        m.dataHash = dataHash;
+        m.isValidated = false;
+        m.hasAnomaly = false;
+
+        projectMeasurements[projectId].push(measurementId);
+        measurementCounts[projectId]++;
+
+        emit MeasurementReceived(measurementId, projectId, sensorId, calibratedValue, measurementType, block.timestamp);
     }
 
     /**
@@ -347,7 +382,7 @@ contract DMRVOracle is AccessControl, Pausable {
         bool isValid,
         bool hasAnomaly
     ) external onlyRole(DATA_VALIDATOR_ROLE) {
-        require(measurements[measurementId].measurementId != bytes32(0), "Measurement not found");
+        if (measurements[measurementId].measurementId == bytes32(0)) revert MeasurementNotFound();
 
         measurements[measurementId].isValidated = true;
         measurements[measurementId].hasAnomaly = hasAnomaly;
@@ -447,7 +482,7 @@ contract DMRVOracle is AccessControl, Pausable {
      * @dev Resolve an alert
      */
     function resolveAlert(uint256 alertId) external onlyRole(ORACLE_OPERATOR_ROLE) {
-        require(!alerts[alertId].isResolved, "Already resolved");
+        if (alerts[alertId].isResolved) revert AlreadyResolved();
 
         alerts[alertId].isResolved = true;
         alerts[alertId].resolvedBy = msg.sender;
@@ -497,9 +532,9 @@ contract DMRVOracle is AccessControl, Pausable {
         int256 totalReductions,
         string calldata reportHash
     ) external onlyRole(ORACLE_OPERATOR_ROLE) {
-        require(reportId != bytes32(0), "Invalid reportId");
-        require(periodEnd > periodStart, "Invalid period");
-        require(reports[reportId].reportId == bytes32(0), "Report exists");
+        if (reportId == bytes32(0)) revert InvalidReportId();
+        if (periodEnd <= periodStart) revert InvalidPeriod();
+        if (reports[reportId].reportId != bytes32(0)) revert ReportExists();
 
         int256 netReduction = totalReductions - totalEmissions;
 
@@ -528,8 +563,8 @@ contract DMRVOracle is AccessControl, Pausable {
      * @dev Verify a monitoring report
      */
     function verifyMonitoringReport(bytes32 reportId) external onlyRole(DATA_VALIDATOR_ROLE) {
-        require(reports[reportId].reportId != bytes32(0), "Report not found");
-        require(!reports[reportId].isVerified, "Already verified");
+        if (reports[reportId].reportId == bytes32(0)) revert ReportNotFound();
+        if (reports[reportId].isVerified) revert AlreadyVerified();
 
         reports[reportId].isVerified = true;
         reports[reportId].verifiedBy = msg.sender;
