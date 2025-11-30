@@ -99,7 +99,7 @@ interface IVintageTracker {
  * - Oracle Aggregator: Multi-oracle redundancy for data integrity
  * - Vintage Tracker: Credit lifecycle and vintage tracking
  */
-contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessControl, Pausable {
+contract LMCXCarbonCredit is ERC1155Burnable, ERC1155Supply, AccessControl, Pausable {
     using Strings for uint256;
 
     // ============ Roles ============
@@ -1103,7 +1103,7 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
         uint256[] memory ids,
         uint256[] memory amounts,
         bytes memory data
-    ) internal override(ERC1155, ERC1155Supply) whenNotPaused {
+    ) internal override(ERC1155Supply) whenNotPaused {
         super._beforeTokenTransfer(operator, from, to, ids, amounts, data);
 
         // Check transfer restrictions for each token
@@ -1178,7 +1178,7 @@ contract LMCXCarbonCredit is ERC1155, ERC1155Burnable, ERC1155Supply, AccessCont
     function supportsInterface(bytes4 interfaceId)
         public
         view
-        override(ERC1155, AccessControl)
+        override(ERC1155Supply, AccessControl)
         returns (bool)
     {
         return super.supportsInterface(interfaceId);
